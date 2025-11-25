@@ -4612,11 +4612,15 @@ classdef MatViewerTool < matlab.apps.AppBase
                             continue;
                         end
                         
-                        % 检查是否为帧信息字段
+                        % 检查是否为帧信息字段（仅当用户未手动覆盖时才从frame_info读取）
                         isFrameInfoParam = false;
                         if hasFrameInfo && isfield(currentData.frame_info, paramName)
-                            isFrameInfoParam = true;
-                            frameInfoParams{end+1} = paramName;
+                            % 只有当参数值为空或仍为提示文案时，才标记为使用帧信息
+                            if isempty(paramValue) || ...
+                               (ischar(paramValue) && strcmp(strtrim(paramValue), '将使用帧信息中的参数值'))
+                                isFrameInfoParam = true;
+                                frameInfoParams{end+1} = paramName;
+                            end
                         end
 
                         try
@@ -5143,7 +5147,13 @@ classdef MatViewerTool < matlab.apps.AppBase
                                     if isfield(currentData, 'frame_info')
                                         for k = 1:length(prepConfig.frameInfoParams)
                                             paramName = prepConfig.frameInfoParams{k};
-                                            if isfield(currentData.frame_info, paramName)
+
+                                            % 只有当参数尚未设置或明确标记为从frame_info获取时才覆盖，避免意外覆盖用户手动输入
+                                            shouldReplace = ~isfield(actualParams, paramName) || ...
+                                                (ischar(actualParams.(paramName)) && strcmp(actualParams.(paramName), '__FROM_FRAME_INFO__')) || ...
+                                                (isstring(actualParams.(paramName)) && actualParams.(paramName) == "__FROM_FRAME_INFO__");
+
+                                            if shouldReplace && isfield(currentData.frame_info, paramName)
                                                 % 获取原始值
                                                 rawValue = currentData.frame_info.(paramName);
                                                 % 根据参数类型转换
@@ -5431,7 +5441,13 @@ classdef MatViewerTool < matlab.apps.AppBase
                             if isfield(currentData, 'frame_info')
                                 for k = 1:length(prepConfig.frameInfoParams)
                                     paramName = prepConfig.frameInfoParams{k};
-                                    if isfield(currentData.frame_info, paramName)
+
+                                    % 仅当参数未设置或标记为占位符时才使用frame_info，防止覆盖手动输入
+                                    shouldReplace = ~isfield(actualParams, paramName) || ...
+                                        (ischar(actualParams.(paramName)) && strcmp(actualParams.(paramName), '__FROM_FRAME_INFO__')) || ...
+                                        (isstring(actualParams.(paramName)) && actualParams.(paramName) == "__FROM_FRAME_INFO__");
+
+                                    if shouldReplace && isfield(currentData.frame_info, paramName)
                                         % 获取原始值
                                         rawValue = currentData.frame_info.(paramName);
                                         % 根据参数类型转换
@@ -5762,7 +5778,12 @@ classdef MatViewerTool < matlab.apps.AppBase
 
                             for k = 1:length(prepConfig.frameInfoParams)
                                 paramName = prepConfig.frameInfoParams{k};
-                                if isfield(fileData.frame_info, paramName)
+                                % 仅当未手动设置或占位符时才使用frame_info，防止覆盖用户输入
+                                shouldReplace = ~isfield(actualParams, paramName) || ...
+                                    (ischar(actualParams.(paramName)) && strcmp(actualParams.(paramName), '__FROM_FRAME_INFO__')) || ...
+                                    (isstring(actualParams.(paramName)) && actualParams.(paramName) == "__FROM_FRAME_INFO__");
+
+                                if shouldReplace && isfield(fileData.frame_info, paramName)
                                     rawValue = fileData.frame_info.(paramName);
                                     if isfield(prepConfig, 'paramTypes') && isfield(prepConfig.paramTypes, paramName)
                                         paramType = prepConfig.paramTypes.(paramName);
@@ -5909,7 +5930,12 @@ classdef MatViewerTool < matlab.apps.AppBase
                         currentData = prepConfig.currentData;
                         for k = 1:length(prepConfig.frameInfoParams)
                             paramName = prepConfig.frameInfoParams{k};
-                            if isfield(currentData.frame_info, paramName)
+                            % 仅在未手动设置或占位符时才用frame_info，避免覆盖用户输入
+                            shouldReplace = ~isfield(actualParams, paramName) || ...
+                                (ischar(actualParams.(paramName)) && strcmp(actualParams.(paramName), '__FROM_FRAME_INFO__')) || ...
+                                (isstring(actualParams.(paramName)) && actualParams.(paramName) == "__FROM_FRAME_INFO__");
+
+                            if shouldReplace && isfield(currentData.frame_info, paramName)
                                 % 获取原始值
                                 rawValue = currentData.frame_info.(paramName);
                                 % 根据参数类型转换
