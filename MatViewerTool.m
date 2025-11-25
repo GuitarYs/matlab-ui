@@ -1,4 +1,3 @@
-
 classdef MatViewerTool < matlab.apps.AppBase
     % 实验数据可视化处理工具 - MATLAB版本
     
@@ -101,6 +100,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         PrepTagPanel            matlab.ui.container.Panel   % 预处理标签面板
         AddPrepBtn              matlab.ui.control.Button
         ClearPrepBtn            matlab.ui.control.Button
+        ShowPrep3Btn            matlab.ui.control.Button    % 预处理3按钮
         
         % 多视图显示
         ImageAxes1              matlab.ui.control.UIAxes
@@ -890,6 +890,15 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.ShowDetectionBtn.Layout.Column = 6;
             app.ShowDetectionBtn.ButtonPushedFcn = createCallbackFcn(app, @(~,~)executeDefaultPrep(app, 4), true);
             app.ShowDetectionBtn.Tooltip = '多维识别预处理';
+
+            % 预处理3按钮（预留）
+            app.ShowPrep3Btn = uibutton(prepLayout, 'push');
+            app.ShowPrep3Btn.Text = '预处理';
+            app.ShowPrep3Btn.Enable = 'off';
+            app.ShowPrep3Btn.Layout.Row = 1;
+            app.ShowPrep3Btn.Layout.Column = 7;
+            app.ShowPrep3Btn.ButtonPushedFcn = createCallbackFcn(app, @(~,~)executePrepOnCurrentFrame(app, -1), true);  % -1表示使用最新的预处理
+            app.ShowPrep3Btn.Tooltip = '自定义预处理';
 
             % 动态预处理按钮容器（用于显示自定义预处理按钮）
             app.DynamicPrepPanel = uipanel(prepLayout);
@@ -5259,7 +5268,16 @@ classdef MatViewerTool < matlab.apps.AppBase
 
             numPreps = length(app.PreprocessingList);
 
+            if numPreps > 0
+                app.ShowPrep3Btn.Enable = 'on';
+                app.ShowPrep3Btn.Text = app.PreprocessingList{end}.name;  % 最新添加的预处理
+            else
+                app.ShowPrep3Btn.Enable = 'off';
+                app.ShowPrep3Btn.Text = '预处理';
+            end
+
             % 更新按钮状态 - 现在支持添加多个预处理，不再限制数量
+
             app.AddPrepBtn.Enable = 'on';
 
             % 检查是否有任何预处理结果
@@ -5479,7 +5497,7 @@ classdef MatViewerTool < matlab.apps.AppBase
                             % 如果输出是结构体，检查是否包含complex_matrix字段
                             if isfield(scriptOutput, 'complex_matrix')
                                 processedMatrix = scriptOutput.complex_matrix;
-                                % 保存其他字段作为额外输出
+                                % 保存其他字段
                                 allFields = fieldnames(scriptOutput);
                                 for i = 1:length(allFields)
                                     fieldName = allFields{i};
@@ -6504,6 +6522,8 @@ classdef MatViewerTool < matlab.apps.AppBase
                 
                 % 重置按钮状态（保留默认预处理按钮）
                 app.ShowOriginalCheck.Value = true;
+                app.ShowPrep3Btn.Enable = 'off';
+                app.ShowPrep3Btn.Text = '预处理';
                 % 默认预处理按钮保持启用和文本不变
                 % 非相参积累、非相参识别、CFAR检测、多维识别按钮是默认预处理，不清除
 
