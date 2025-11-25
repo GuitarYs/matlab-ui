@@ -18,6 +18,8 @@ function output_data = default_cfar(input_data, params)
     [training_cells, training_source] = getParam(params, 'training_cells', 16);
     [method, method_source] = getParam(params, 'method', 'CA');
     [apply_log, apply_log_source] = getParam(params, 'apply_log', true);
+    % 便于测试手动配置是否生效：尝试读取自定义参数 D（若不存在则忽略）
+    [test_param_d, test_param_d_source] = getParam(params, 'D', []);
 
     % 输出当前参数值及来源，便于验证是否被帧信息覆盖
     fprintf('\n========================================\n');
@@ -28,6 +30,9 @@ function output_data = default_cfar(input_data, params)
     fprintf('training_cells: %d (source: %s)\n', training_cells, training_source);
     fprintf('method: %s (source: %s)\n', string(method), method_source);
     fprintf('apply_log: %d (source: %s)\n', apply_log, apply_log_source);
+    if ~isempty(test_param_d)
+        fprintf('D: %g (source: %s)\n', test_param_d, test_param_d_source);
+    end
     if isfield(params, 'frame_info')
         fprintf('已接收 frame_info，可用于缺省参数。\n');
     end
@@ -122,13 +127,15 @@ function output_data = default_cfar(input_data, params)
         'guard_cells', guard_cells, ...
         'training_cells', training_cells, ...
         'method', method, ...
-        'apply_log', apply_log);  % 实际使用的参数值
+        'apply_log', apply_log, ...
+        'D', test_param_d);  % 实际使用的参数值
     output_data.param_sources = struct( ...
         'threshold_factor', threshold_source, ...
         'guard_cells', guard_source, ...
         'training_cells', training_source, ...
         'method', method_source, ...
-        'apply_log', apply_log_source);  % 参数来源追踪
+        'apply_log', apply_log_source, ...
+        'D', test_param_d_source);  % 参数来源追踪
     output_data.method = method;  % CFAR方法
     output_data.apply_log = apply_log;  % 是否应用了对数变换
     output_data.timestamp = datetime('now');  % 处理时间戳
