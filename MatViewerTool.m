@@ -4613,21 +4613,26 @@ classdef MatViewerTool < matlab.apps.AppBase
                         end
                         
                         % 检查是否为帧信息字段
-                        isFrameInfoParam = false;
-                        if hasFrameInfo && isfield(currentData.frame_info, paramName)
-                            isFrameInfoParam = true;
-                            frameInfoParams{end+1} = paramName;
+                        isFrameInfoParam = hasFrameInfo && isfield(currentData.frame_info, paramName);
+
+                        % 判断用户是否提供了显式的参数值（非空且不是"将使用帧信息中的参数值"提示）
+                        hasUserValue = true;
+                        if isempty(paramValue)
+                            hasUserValue = false;
+                        elseif ischar(paramValue) || isstring(paramValue)
+                            hasUserValue = ~contains(char(paramValue), '将使用帧信息中的参数值');
                         end
 
                         try
-                            if isFrameInfoParam
-                                % 标记为从帧信息获取
-                                params.(paramName) = '__FROM_FRAME_INFO__';
-                            elseif exist('currentOutputVars', 'var') && isfield(currentOutputVars, paramName)
+                            if exist('currentOutputVars', 'var') && isfield(currentOutputVars, paramName)
                                 % 从输出变量中获取原始值（避免字符串转换错误）
                                 params.(paramName) = currentOutputVars.(paramName);
+                            elseif isFrameInfoParam && ~hasUserValue
+                                % 仅在未手动配置时，才从帧信息动态获取
+                                frameInfoParams{end+1} = paramName;
+                                params.(paramName) = '__FROM_FRAME_INFO__';
                             else
-                                % 手动输入的参数：从字符串转换为对应类型
+                                % 手动输入的参数：从字符串转换为对应类型（优先级最高）
                                 params.(paramName) = app.convertParamValue(paramValue, paramType);
                             end
                         catch ME
