@@ -7012,34 +7012,69 @@ classdef MatViewerTool < matlab.apps.AppBase
                 % 获取当前帧数据
                 currentData = app.MatData{app.CurrentIndex};
 
-                % 检查complex_matrix字段，支持嵌套结构体
-                complexMatrixFound = false;
+                % 默认使用当前数据作为输入
                 inputMatrix = [];
-                
-                if isfield(currentData, 'complex_matrix')
-                    inputMatrix = currentData.complex_matrix;
-                    complexMatrixFound = true;
-                else
-                    % 遍历所有结构体字段查找嵌套的complex_matrix
-                    fields = fieldnames(currentData);
-                    for i = 1:length(fields)
-                        fieldName = fields{i};
-                        fieldValue = currentData.(fieldName);
-                        if isstruct(fieldValue) && isfield(fieldValue, 'complex_matrix')
-                            inputMatrix = fieldValue.complex_matrix;
+                complexMatrixFound = false;
+                previousPrepData = [];
+
+                % 如果当前步骤依赖上一步的默认预处理，优先从缓存中获取
+                if defaultPrepIndex == 2
+                    % 非相参识别依赖“非相参积累”结果（列3）
+                    if ~isempty(app.PreprocessingResults) && ...
+                       app.CurrentIndex <= size(app.PreprocessingResults, 1) && ...
+                       size(app.PreprocessingResults, 2) >= 3 && ...
+                       ~isempty(app.PreprocessingResults{app.CurrentIndex, 3})
+                        previousPrepData = app.PreprocessingResults{app.CurrentIndex, 3};
+                        if isfield(previousPrepData, 'complex_matrix')
+                            inputMatrix = previousPrepData.complex_matrix;
                             complexMatrixFound = true;
-                            break;
+                        end
+                    end
+                elseif defaultPrepIndex == 4
+                    % 多维识别依赖“CFAR检测”结果（列2）
+                    if ~isempty(app.PreprocessingResults) && ...
+                       app.CurrentIndex <= size(app.PreprocessingResults, 1) && ...
+                       size(app.PreprocessingResults, 2) >= 2 && ...
+                       ~isempty(app.PreprocessingResults{app.CurrentIndex, 2})
+                        previousPrepData = app.PreprocessingResults{app.CurrentIndex, 2};
+                        if isfield(previousPrepData, 'complex_matrix')
+                            inputMatrix = previousPrepData.complex_matrix;
+                            complexMatrixFound = true;
                         end
                     end
                 end
-                
+
+                % 如果未找到上一步输出，则回退到原始数据
+                if ~complexMatrixFound
+                    if isfield(currentData, 'complex_matrix')
+                        inputMatrix = currentData.complex_matrix;
+                        complexMatrixFound = true;
+                    else
+                        % 遍历所有结构体字段查找嵌套的complex_matrix
+                        fields = fieldnames(currentData);
+                        for i = 1:length(fields)
+                            fieldName = fields{i};
+                            fieldValue = currentData.(fieldName);
+                            if isstruct(fieldValue) && isfield(fieldValue, 'complex_matrix')
+                                inputMatrix = fieldValue.complex_matrix;
+                                complexMatrixFound = true;
+                                break;
+                            end
+                        end
+                    end
+                end
+
                 if ~complexMatrixFound
                     uialert(app.UIFigure, '当前数据不包含complex_matrix字段！', '错误', 'Icon', 'error');
                     return;
                 end
 
                 % 保存原始矩阵（用于后续可能的预处理）
-                rawMatrix = inputMatrix;
+                if ~isempty(previousPrepData) && isfield(previousPrepData, 'raw_matrix')
+                    rawMatrix = previousPrepData.raw_matrix;
+                else
+                    rawMatrix = inputMatrix;
+                end
 
                 % 创建输出目录
                 [dataPath, ~, ~] = fileparts(app.MatFiles{app.CurrentIndex});
@@ -7057,12 +7092,41 @@ classdef MatViewerTool < matlab.apps.AppBase
 
                 try
                     % 添加输出目录和文件名到参数中（供脚本使用）
-                    params.output_dir = outputDir;
-                    params.file_name = originalName;
+                    actualParams = params;
+                    actualParams.output_dir = outputDir;
+                    actualParams.file_name = originalName;
+
+                    % 如果存在上一步结果，将其中的关键字段传递到参数中
+                    if ~isempty(previousPrepData)
+                        if isfield(previousPrepData, 'raw_matrix')
+                            actualParams.raw_matrix = previousPrepData.raw_matrix;
+                        end
+                        if isfield(previousPrepData, 'frame_info')
+                            actualParams.frame_info = previousPrepData.frame_info;
+                        elseif isfield(currentData, 'frame_info')
+                            % 如果上一步没有frame_info，则回退当前帧信息
+                            actualParams.frame_info = currentData.frame_info;
+                        end
+                        if isfield(previousPrepData, 'preprocessing_info')
+                            actualParams.preprocessing_info = previousPrepData.preprocessing_info;
+                        end
+                        if isfield(previousPrepData, 'additional_outputs')
+                            addFields = fieldnames(previousPrepData.additional_outputs);
+                            for i = 1:length(addFields)
+                                fieldName = addFields{i};
+                                if ~isfield(actualParams, fieldName)
+                                    actualParams.(fieldName) = previousPrepData.additional_outputs.(fieldName);
+                                end
+                            end
+                        end
+                    elseif isfield(currentData, 'frame_info')
+                        % 没有上一步结果时也传入当前帧信息
+                        actualParams.frame_info = currentData.frame_info;
+                    end
 
                     % 调用脚本函数
                     scriptFunc = str2func(scriptName);
-                    processedMatrix = scriptFunc(inputMatrix, params);
+                    processedMatrix = scriptFunc(inputMatrix, actualParams);
 
                     % 验证输出
                     if ~isnumeric(processedMatrix)
