@@ -7095,12 +7095,10 @@ classdef MatViewerTool < matlab.apps.AppBase
                     actualParams = params;
                     actualParams.output_dir = outputDir;
                     actualParams.file_name = originalName;
+                    actualParams.raw_matrix = rawMatrix;  % 始终传递原始输入，便于下游读取
 
                     % 如果存在上一步结果，将其中的关键字段传递到参数中
                     if ~isempty(previousPrepData)
-                        if isfield(previousPrepData, 'raw_matrix')
-                            actualParams.raw_matrix = previousPrepData.raw_matrix;
-                        end
                         if isfield(previousPrepData, 'frame_info')
                             actualParams.frame_info = previousPrepData.frame_info;
                         elseif isfield(currentData, 'frame_info')
@@ -7118,10 +7116,14 @@ classdef MatViewerTool < matlab.apps.AppBase
                                     actualParams.(fieldName) = previousPrepData.additional_outputs.(fieldName);
                                 end
                             end
+                            % 同时提供一个集合字段，方便脚本整体读取
+                            actualParams.additional_outputs = previousPrepData.additional_outputs;
                         end
-                    elseif isfield(currentData, 'frame_info')
-                        % 没有上一步结果时也传入当前帧信息
-                        actualParams.frame_info = currentData.frame_info;
+                    else
+                        % 没有上一步结果时也传入当前帧信息（若存在）
+                        if isfield(currentData, 'frame_info')
+                            actualParams.frame_info = currentData.frame_info;
+                        end
                     end
 
                     % 调用脚本函数
@@ -7169,6 +7171,7 @@ classdef MatViewerTool < matlab.apps.AppBase
                 % 创建处理后的数据
                 processedData = currentData;
                 processedData.complex_matrix = processedMatrix;
+                processedData.raw_matrix = rawMatrix;
                 processedData.preprocessing_info = prepConfig;
                 processedData.preprocessing_time = datetime('now');
 
