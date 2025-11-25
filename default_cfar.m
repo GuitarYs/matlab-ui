@@ -12,12 +12,26 @@ function output_data = default_cfar(input_data, params)
 % PARAM: apply_log, bool, true
 
 
-    % 获取参数
-    threshold_factor = getParam(params, 'threshold_factor', 3.0);
-    guard_cells = getParam(params, 'guard_cells', 4);
-    training_cells = getParam(params, 'training_cells', 16);
-    method = getParam(params, 'method', 'CA');
-    apply_log = getParam(params, 'apply_log', true);
+    % 获取参数，并记录来源（手动配置/帧信息/默认）
+    [threshold_factor, threshold_source] = getParam(params, 'threshold_factor', 3.0);
+    [guard_cells, guard_source] = getParam(params, 'guard_cells', 4);
+    [training_cells, training_source] = getParam(params, 'training_cells', 16);
+    [method, method_source] = getParam(params, 'method', 'CA');
+    [apply_log, apply_log_source] = getParam(params, 'apply_log', true);
+
+    % 输出当前参数值及来源，便于验证是否被帧信息覆盖
+    fprintf('\n========================================\n');
+    fprintf('CFAR 预处理参数检查\n');
+    fprintf('========================================\n');
+    fprintf('threshold_factor: %g (source: %s)\n', threshold_factor, threshold_source);
+    fprintf('guard_cells: %d (source: %s)\n', guard_cells, guard_source);
+    fprintf('training_cells: %d (source: %s)\n', training_cells, training_source);
+    fprintf('method: %s (source: %s)\n', string(method), method_source);
+    fprintf('apply_log: %d (source: %s)\n', apply_log, apply_log_source);
+    if isfield(params, 'frame_info')
+        fprintf('已接收 frame_info，可用于缺省参数。\n');
+    end
+    fprintf('========================================\n\n');
     
 
     % 确保输入为复数矩阵
@@ -102,7 +116,19 @@ function output_data = default_cfar(input_data, params)
     output_data.detection_mask = detected;  % 检测掩码
     output_data.thresholds = thresholds;  % 阈值矩阵
     output_data.training_means = training_means;  % 训练窗口均值
-    output_data.processing_params = params;  % 使用的处理参数
+    output_data.processing_params = params;  % 使用的处理参数（原始传入）
+    output_data.applied_params = struct( ...
+        'threshold_factor', threshold_factor, ...
+        'guard_cells', guard_cells, ...
+        'training_cells', training_cells, ...
+        'method', method, ...
+        'apply_log', apply_log);  % 实际使用的参数值
+    output_data.param_sources = struct( ...
+        'threshold_factor', threshold_source, ...
+        'guard_cells', guard_source, ...
+        'training_cells', training_source, ...
+        'method', method_source, ...
+        'apply_log', apply_log_source);  % 参数来源追踪
     output_data.method = method;  % CFAR方法
     output_data.apply_log = apply_log;  % 是否应用了对数变换
     output_data.timestamp = datetime('now');  % 处理时间戳
@@ -128,11 +154,16 @@ function output_data = default_cfar(input_data, params)
 
 end
 
-function value = getParam(params, name, default_value)
-    % 辅助函数：从params结构体中获取参数值
+function [value, source] = getParam(params, name, default_value)
+    % 辅助函数：从params结构体中获取参数值，并标记来源
     if isfield(params, name)
         value = params.(name);
+        source = 'params';
+    elseif isfield(params, 'frame_info') && isstruct(params.frame_info) && isfield(params.frame_info, name)
+        value = params.frame_info.(name);
+        source = 'frame_info';
     else
         value = default_value;
+        source = 'default';
     end
 end
