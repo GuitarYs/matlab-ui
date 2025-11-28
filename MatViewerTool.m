@@ -3155,9 +3155,16 @@ classdef MatViewerTool < matlab.apps.AppBase
             % 更新播放间隔
             app.AutoPlayInterval = newInterval;
             if ~isempty(app.AutoPlayTimer) && isvalid(app.AutoPlayTimer)
+                wasRunning = strcmp(app.AutoPlayTimer.Running, 'on');
+                if wasRunning
+                    stop(app.AutoPlayTimer);
+                end
                 app.AutoPlayTimer.Period = newInterval;
+                if wasRunning
+                    start(app.AutoPlayTimer);
+                end
             end
-        end 
+        end
 
         function valueStr = formatDisplayValue(app, value, indent)
             % 格式化值的显示（通用方法）
