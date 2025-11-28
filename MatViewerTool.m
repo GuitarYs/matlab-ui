@@ -1709,28 +1709,33 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function displayCurrentImage(app)
             % 显示当前帧图像 - 根据预处理结果自动显示多视图
-            
+
             if isempty(app.MatData) || app.CurrentIndex > length(app.MatData)
                 return;
             end
-            
-            % 判断当前帧是否有预处理结果
-            hasResults = false;
-            if ~isempty(app.PreprocessingResults) && app.CurrentIndex <= size(app.PreprocessingResults, 1)
-                % 检查是否有任何预处理结果（第2-4列）
-                for i = 2:4
-                    if ~isempty(app.PreprocessingResults{app.CurrentIndex, i})
-                        hasResults = true;
-                        break;
+
+            % 自动播放时强制仅显示原图，关闭其他子图
+            if app.AutoPlayActive
+                displaySingleView(app);
+            else
+                % 判断当前帧是否有预处理结果
+                hasResults = false;
+                if ~isempty(app.PreprocessingResults) && app.CurrentIndex <= size(app.PreprocessingResults, 1)
+                    % 检查是否有任何预处理结果（第2-4列）
+                    for i = 2:4
+                        if ~isempty(app.PreprocessingResults{app.CurrentIndex, i})
+                            hasResults = true;
+                            break;
+                        end
                     end
                 end
-            end
-            
-            % 如果有预处理结果，使用多视图显示；否则使用单视图
-            if hasResults
-                updateMultiView(app);
-            else
-                displaySingleView(app);
+
+                % 如果有预处理结果，使用多视图显示；否则使用单视图
+                if hasResults
+                    updateMultiView(app);
+                else
+                    displaySingleView(app);
+                end
             end
             
             % 更新帧信息标签
@@ -2527,6 +2532,10 @@ classdef MatViewerTool < matlab.apps.AppBase
                         'Period', app.AutoPlayInterval, ...
                         'TimerFcn', @(~,~) autoPlayNext(app));
                 end
+
+                % 进入自动播放时关闭所有预处理子图，仅保留原图
+                closeAllPreprocessingSubViews(app);
+
                 start(app.AutoPlayTimer);
                 app.AutoPlayActive = true;
                 app.AutoPlayBtn.Text = '停止播放';
@@ -2537,7 +2546,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         function autoPlayNext(app)
             % 自动播放下一帧 - 使用帧间隔
             frameStep = app.FrameStepSpinner.Value;  % 获取帧间隔
-            
+
             % 计算下一帧位置
             nextIndex = app.CurrentIndex + frameStep;
             
@@ -2555,7 +2564,29 @@ classdef MatViewerTool < matlab.apps.AppBase
             updateDisplayButtonsState(app);
             updateImageInfoDisplay(app);  % 更新图像信息
         end
-        
+
+        function closeAllPreprocessingSubViews(app)
+            % 关闭所有预处理子图，仅保留原图显示
+
+            if isempty(app.MatData) || app.CurrentIndex > length(app.MatData)
+                return;
+            end
+
+            % 确保原图保持显示
+            app.ShowOriginalCheck.Value = true;
+
+            % 清空并隐藏其他axes内容
+            cla(app.ImageAxes2, 'reset');
+            cla(app.ImageAxes3, 'reset');
+            cla(app.ImageAxes4, 'reset');
+            app.ImageAxes2.Visible = 'off';
+            app.ImageAxes3.Visible = 'off';
+            app.ImageAxes4.Visible = 'off';
+
+            % 刷新当前帧显示为单图模式
+            displaySingleView(app);
+        end
+
         % ==================== 字段勾选相关函数 ====================
         
         function createFieldCheckboxes(app)
