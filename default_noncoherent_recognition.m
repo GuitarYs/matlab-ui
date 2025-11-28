@@ -17,12 +17,27 @@ function output_data = default_noncoherent_recognition(input_data, params)
     num_classes = getParam(params, 'num_classes', 3);
     threshold_factor = getParam(params, 'threshold_factor', 0.5);
 
+    % 读取上一步的上下文（若有）
+    hasRawMatrix = isfield(params, 'raw_matrix') && isnumeric(params.raw_matrix);
+    hasAdditional = isfield(params, 'additional_outputs') && isstruct(params.additional_outputs);
+    hasFrameInfo = isfield(params, 'frame_info');
+
     fprintf('\n========================================\n');
     fprintf('非相参识别预处理\n');
     fprintf('========================================\n');
     fprintf('输入数据维度: %s\n', mat2str(size(input_data)));
     fprintf('分类数量: %d\n', num_classes);
     fprintf('阈值因子: %.2f\n', threshold_factor);
+    if hasRawMatrix
+        fprintf('可访问原始输入 raw_matrix，尺寸: %s\n', mat2str(size(params.raw_matrix)));
+    end
+    if hasAdditional
+        extraFields = fieldnames(params.additional_outputs);
+        fprintf('附加输出字段: %s\n', strjoin(extraFields, ', '));
+    end
+    if hasFrameInfo
+        fprintf('收到 frame_info，可用于参数推断。\n');
+    end
     fprintf('========================================\n\n');
 
     % 获取输入数据的幅度

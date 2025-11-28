@@ -1709,28 +1709,33 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function displayCurrentImage(app)
             % 显示当前帧图像 - 根据预处理结果自动显示多视图
-            
+
             if isempty(app.MatData) || app.CurrentIndex > length(app.MatData)
                 return;
             end
-            
-            % 判断当前帧是否有预处理结果
-            hasResults = false;
-            if ~isempty(app.PreprocessingResults) && app.CurrentIndex <= size(app.PreprocessingResults, 1)
-                % 检查是否有任何预处理结果（第2-4列）
-                for i = 2:4
-                    if ~isempty(app.PreprocessingResults{app.CurrentIndex, i})
-                        hasResults = true;
-                        break;
+
+            % 自动播放时强制仅显示原图，关闭其他子图
+            if app.AutoPlayActive
+                displaySingleView(app);
+            else
+                % 判断当前帧是否有预处理结果
+                hasResults = false;
+                if ~isempty(app.PreprocessingResults) && app.CurrentIndex <= size(app.PreprocessingResults, 1)
+                    % 检查是否有任何预处理结果（第2-4列）
+                    for i = 2:4
+                        if ~isempty(app.PreprocessingResults{app.CurrentIndex, i})
+                            hasResults = true;
+                            break;
+                        end
                     end
                 end
-            end
-            
-            % 如果有预处理结果，使用多视图显示；否则使用单视图
-            if hasResults
-                updateMultiView(app);
-            else
-                displaySingleView(app);
+
+                % 如果有预处理结果，使用多视图显示；否则使用单视图
+                if hasResults
+                    updateMultiView(app);
+                else
+                    displaySingleView(app);
+                end
             end
             
             % 更新帧信息标签
@@ -1747,7 +1752,13 @@ classdef MatViewerTool < matlab.apps.AppBase
             end
             
             data = app.MatData{app.CurrentIndex};
-            complexMatrix = data.complex_matrix;
+
+            % 自动播放时优先使用原始输入（若有raw_matrix），确保仅展示原图
+            if app.AutoPlayActive
+                complexMatrix = getAutoplayOriginalMatrix(app, data);
+            else
+                complexMatrix = data.complex_matrix;
+            end
             
             % 判断文件名是否为SAR
             [~, filename] = fileparts(app.MatFiles{app.CurrentIndex});
@@ -1789,6 +1800,35 @@ classdef MatViewerTool < matlab.apps.AppBase
                     case '3D图像dB'
                         displayMatrixMesh(app, complexMatrix, true);
                 end
+            end
+        end
+
+        function complexMatrix = getAutoplayOriginalMatrix(app, data)
+            % 自动播放时优先获取原始输入矩阵，避免展示预处理结果
+
+            % 1) 首选当前MatData的raw_matrix
+            if isstruct(data) && isfield(data, 'raw_matrix') && ~isempty(data.raw_matrix)
+                complexMatrix = data.raw_matrix;
+                return;
+            end
+
+            % 2) 尝试从预处理结果缓存中找到带raw_matrix的记录
+            if ~isempty(app.PreprocessingResults) && app.CurrentIndex <= size(app.PreprocessingResults, 1)
+                maxCols = min(size(app.PreprocessingResults, 2), 7);
+                for col = 2:maxCols
+                    candidate = app.PreprocessingResults{app.CurrentIndex, col};
+                    if isstruct(candidate) && isfield(candidate, 'raw_matrix') && ~isempty(candidate.raw_matrix)
+                        complexMatrix = candidate.raw_matrix;
+                        return;
+                    end
+                end
+            end
+
+            % 3) 回退到当前数据的complex_matrix（如果缺少raw_matrix）
+            if isstruct(data) && isfield(data, 'complex_matrix')
+                complexMatrix = data.complex_matrix;
+            else
+                complexMatrix = [];
             end
         end
         
@@ -2527,6 +2567,10 @@ classdef MatViewerTool < matlab.apps.AppBase
                         'Period', app.AutoPlayInterval, ...
                         'TimerFcn', @(~,~) autoPlayNext(app));
                 end
+
+                % 进入自动播放时关闭所有预处理子图，仅保留原图
+                closeAllPreprocessingSubViews(app);
+
                 start(app.AutoPlayTimer);
                 app.AutoPlayActive = true;
                 app.AutoPlayBtn.Text = '停止播放';
@@ -2537,7 +2581,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         function autoPlayNext(app)
             % 自动播放下一帧 - 使用帧间隔
             frameStep = app.FrameStepSpinner.Value;  % 获取帧间隔
-            
+
             % 计算下一帧位置
             nextIndex = app.CurrentIndex + frameStep;
             
@@ -2548,14 +2592,56 @@ classdef MatViewerTool < matlab.apps.AppBase
                 % 超出范围，循环到开头
                 app.CurrentIndex = 1;
             end
-            
+
             app.FrameSlider.Value = app.CurrentIndex;
+
+            % 自动播放过程中在目标帧强制回到单图原图视图
+            enforceAutoplayOriginalView(app);
+
             displayCurrentImage(app);
             updateFrameInfoDisplay(app);
             updateDisplayButtonsState(app);
             updateImageInfoDisplay(app);  % 更新图像信息
         end
-        
+
+        function enforceAutoplayOriginalView(app)
+            % 自动播放时强制只展示当前帧原图，清理其他子图
+            app.ShowOriginalCheck.Value = true;
+
+            % 隐藏并清空其他axes，避免上一帧的预处理图残留
+            cla(app.ImageAxes2, 'reset');
+            cla(app.ImageAxes3, 'reset');
+            cla(app.ImageAxes4, 'reset');
+            app.ImageAxes2.Visible = 'off';
+            app.ImageAxes3.Visible = 'off';
+            app.ImageAxes4.Visible = 'off';
+
+            % 直接以当前帧渲染单图原图视图
+            displaySingleView(app);
+        end
+
+        function closeAllPreprocessingSubViews(app)
+            % 关闭所有预处理子图，仅保留原图显示
+
+            if isempty(app.MatData) || app.CurrentIndex > length(app.MatData)
+                return;
+            end
+
+            % 确保原图保持显示
+            app.ShowOriginalCheck.Value = true;
+
+            % 清空并隐藏其他axes内容
+            cla(app.ImageAxes2, 'reset');
+            cla(app.ImageAxes3, 'reset');
+            cla(app.ImageAxes4, 'reset');
+            app.ImageAxes2.Visible = 'off';
+            app.ImageAxes3.Visible = 'off';
+            app.ImageAxes4.Visible = 'off';
+
+            % 刷新当前帧显示为单图模式
+            displaySingleView(app);
+        end
+
         % ==================== 字段勾选相关函数 ====================
         
         function createFieldCheckboxes(app)
@@ -3124,9 +3210,16 @@ classdef MatViewerTool < matlab.apps.AppBase
             % 更新播放间隔
             app.AutoPlayInterval = newInterval;
             if ~isempty(app.AutoPlayTimer) && isvalid(app.AutoPlayTimer)
+                wasRunning = strcmp(app.AutoPlayTimer.Running, 'on');
+                if wasRunning
+                    stop(app.AutoPlayTimer);
+                end
                 app.AutoPlayTimer.Period = newInterval;
+                if wasRunning
+                    start(app.AutoPlayTimer);
+                end
             end
-        end 
+        end
 
         function valueStr = formatDisplayValue(app, value, indent)
             % 格式化值的显示（通用方法）
@@ -4613,21 +4706,26 @@ classdef MatViewerTool < matlab.apps.AppBase
                         end
                         
                         % 检查是否为帧信息字段
-                        isFrameInfoParam = false;
-                        if hasFrameInfo && isfield(currentData.frame_info, paramName)
-                            isFrameInfoParam = true;
-                            frameInfoParams{end+1} = paramName;
+                        isFrameInfoParam = hasFrameInfo && isfield(currentData.frame_info, paramName);
+
+                        % 判断用户是否提供了显式的参数值（非空且不是"将使用帧信息中的参数值"提示）
+                        hasUserValue = true;
+                        if isempty(paramValue)
+                            hasUserValue = false;
+                        elseif ischar(paramValue) || isstring(paramValue)
+                            hasUserValue = ~contains(char(paramValue), '将使用帧信息中的参数值');
                         end
 
                         try
-                            if isFrameInfoParam
-                                % 标记为从帧信息获取
-                                params.(paramName) = '__FROM_FRAME_INFO__';
-                            elseif exist('currentOutputVars', 'var') && isfield(currentOutputVars, paramName)
+                            if exist('currentOutputVars', 'var') && isfield(currentOutputVars, paramName)
                                 % 从输出变量中获取原始值（避免字符串转换错误）
                                 params.(paramName) = currentOutputVars.(paramName);
+                            elseif isFrameInfoParam && ~hasUserValue
+                                % 仅在未手动配置时，才从帧信息动态获取
+                                frameInfoParams{end+1} = paramName;
+                                params.(paramName) = '__FROM_FRAME_INFO__';
                             else
-                                % 手动输入的参数：从字符串转换为对应类型
+                                % 手动输入的参数：从字符串转换为对应类型（优先级最高）
                                 params.(paramName) = app.convertParamValue(paramValue, paramType);
                             end
                         catch ME
@@ -7012,34 +7110,69 @@ classdef MatViewerTool < matlab.apps.AppBase
                 % 获取当前帧数据
                 currentData = app.MatData{app.CurrentIndex};
 
-                % 检查complex_matrix字段，支持嵌套结构体
-                complexMatrixFound = false;
+                % 默认使用当前数据作为输入
                 inputMatrix = [];
-                
-                if isfield(currentData, 'complex_matrix')
-                    inputMatrix = currentData.complex_matrix;
-                    complexMatrixFound = true;
-                else
-                    % 遍历所有结构体字段查找嵌套的complex_matrix
-                    fields = fieldnames(currentData);
-                    for i = 1:length(fields)
-                        fieldName = fields{i};
-                        fieldValue = currentData.(fieldName);
-                        if isstruct(fieldValue) && isfield(fieldValue, 'complex_matrix')
-                            inputMatrix = fieldValue.complex_matrix;
+                complexMatrixFound = false;
+                previousPrepData = [];
+
+                % 如果当前步骤依赖上一步的默认预处理，优先从缓存中获取
+                if defaultPrepIndex == 2
+                    % 非相参识别依赖“非相参积累”结果（列3）
+                    if ~isempty(app.PreprocessingResults) && ...
+                       app.CurrentIndex <= size(app.PreprocessingResults, 1) && ...
+                       size(app.PreprocessingResults, 2) >= 3 && ...
+                       ~isempty(app.PreprocessingResults{app.CurrentIndex, 3})
+                        previousPrepData = app.PreprocessingResults{app.CurrentIndex, 3};
+                        if isfield(previousPrepData, 'complex_matrix')
+                            inputMatrix = previousPrepData.complex_matrix;
                             complexMatrixFound = true;
-                            break;
+                        end
+                    end
+                elseif defaultPrepIndex == 4
+                    % 多维识别依赖“CFAR检测”结果（列2）
+                    if ~isempty(app.PreprocessingResults) && ...
+                       app.CurrentIndex <= size(app.PreprocessingResults, 1) && ...
+                       size(app.PreprocessingResults, 2) >= 2 && ...
+                       ~isempty(app.PreprocessingResults{app.CurrentIndex, 2})
+                        previousPrepData = app.PreprocessingResults{app.CurrentIndex, 2};
+                        if isfield(previousPrepData, 'complex_matrix')
+                            inputMatrix = previousPrepData.complex_matrix;
+                            complexMatrixFound = true;
                         end
                     end
                 end
-                
+
+                % 如果未找到上一步输出，则回退到原始数据
+                if ~complexMatrixFound
+                    if isfield(currentData, 'complex_matrix')
+                        inputMatrix = currentData.complex_matrix;
+                        complexMatrixFound = true;
+                    else
+                        % 遍历所有结构体字段查找嵌套的complex_matrix
+                        fields = fieldnames(currentData);
+                        for i = 1:length(fields)
+                            fieldName = fields{i};
+                            fieldValue = currentData.(fieldName);
+                            if isstruct(fieldValue) && isfield(fieldValue, 'complex_matrix')
+                                inputMatrix = fieldValue.complex_matrix;
+                                complexMatrixFound = true;
+                                break;
+                            end
+                        end
+                    end
+                end
+
                 if ~complexMatrixFound
                     uialert(app.UIFigure, '当前数据不包含complex_matrix字段！', '错误', 'Icon', 'error');
                     return;
                 end
 
                 % 保存原始矩阵（用于后续可能的预处理）
-                rawMatrix = inputMatrix;
+                if ~isempty(previousPrepData) && isfield(previousPrepData, 'raw_matrix')
+                    rawMatrix = previousPrepData.raw_matrix;
+                else
+                    rawMatrix = inputMatrix;
+                end
 
                 % 创建输出目录
                 [dataPath, ~, ~] = fileparts(app.MatFiles{app.CurrentIndex});
@@ -7057,12 +7190,43 @@ classdef MatViewerTool < matlab.apps.AppBase
 
                 try
                     % 添加输出目录和文件名到参数中（供脚本使用）
-                    params.output_dir = outputDir;
-                    params.file_name = originalName;
+                    actualParams = params;
+                    actualParams.output_dir = outputDir;
+                    actualParams.file_name = originalName;
+                    actualParams.raw_matrix = rawMatrix;  % 始终传递原始输入，便于下游读取
+
+                    % 如果存在上一步结果，将其中的关键字段传递到参数中
+                    if ~isempty(previousPrepData)
+                        if isfield(previousPrepData, 'frame_info')
+                            actualParams.frame_info = previousPrepData.frame_info;
+                        elseif isfield(currentData, 'frame_info')
+                            % 如果上一步没有frame_info，则回退当前帧信息
+                            actualParams.frame_info = currentData.frame_info;
+                        end
+                        if isfield(previousPrepData, 'preprocessing_info')
+                            actualParams.preprocessing_info = previousPrepData.preprocessing_info;
+                        end
+                        if isfield(previousPrepData, 'additional_outputs')
+                            addFields = fieldnames(previousPrepData.additional_outputs);
+                            for i = 1:length(addFields)
+                                fieldName = addFields{i};
+                                if ~isfield(actualParams, fieldName)
+                                    actualParams.(fieldName) = previousPrepData.additional_outputs.(fieldName);
+                                end
+                            end
+                            % 同时提供一个集合字段，方便脚本整体读取
+                            actualParams.additional_outputs = previousPrepData.additional_outputs;
+                        end
+                    else
+                        % 没有上一步结果时也传入当前帧信息（若存在）
+                        if isfield(currentData, 'frame_info')
+                            actualParams.frame_info = currentData.frame_info;
+                        end
+                    end
 
                     % 调用脚本函数
                     scriptFunc = str2func(scriptName);
-                    processedMatrix = scriptFunc(inputMatrix, params);
+                    processedMatrix = scriptFunc(inputMatrix, actualParams);
 
                     % 验证输出
                     if ~isnumeric(processedMatrix)
@@ -7105,6 +7269,7 @@ classdef MatViewerTool < matlab.apps.AppBase
                 % 创建处理后的数据
                 processedData = currentData;
                 processedData.complex_matrix = processedMatrix;
+                processedData.raw_matrix = rawMatrix;
                 processedData.preprocessing_info = prepConfig;
                 processedData.preprocessing_time = datetime('now');
 

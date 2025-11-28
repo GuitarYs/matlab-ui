@@ -10,6 +10,7 @@ function output_data = default_cfar(input_data, params)
 % PARAM: training_cells, int, 16
 % PARAM: method, string, CA
 % PARAM: apply_log, bool, true
+% PARAM: D, double, []
 
 
     % 获取参数
@@ -18,6 +19,8 @@ function output_data = default_cfar(input_data, params)
     training_cells = getParam(params, 'training_cells', 16);
     method = getParam(params, 'method', 'CA');
     apply_log = getParam(params, 'apply_log', true);
+    % 便于测试：尝试读取自定义参数 D（若不存在则返回默认空值）
+    test_param_d = getParam(params, 'D', []);
     
 
     % 确保输入为复数矩阵
@@ -103,6 +106,8 @@ function output_data = default_cfar(input_data, params)
     output_data.thresholds = thresholds;  % 阈值矩阵
     output_data.training_means = training_means;  % 训练窗口均值
     output_data.processing_params = params;  % 使用的处理参数
+    output_data.threshold_factor = threshold_factor;
+    output_data.D = test_param_d;
     output_data.method = method;  % CFAR方法
     output_data.apply_log = apply_log;  % 是否应用了对数变换
     output_data.timestamp = datetime('now');  % 处理时间戳
@@ -132,6 +137,8 @@ function value = getParam(params, name, default_value)
     % 辅助函数：从params结构体中获取参数值
     if isfield(params, name)
         value = params.(name);
+    elseif isfield(params, 'frame_info') && isstruct(params.frame_info) && isfield(params.frame_info, name)
+        value = params.frame_info.(name);
     else
         value = default_value;
     end
