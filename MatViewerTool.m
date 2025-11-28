@@ -2553,9 +2553,6 @@ classdef MatViewerTool < matlab.apps.AppBase
             % 自动播放下一帧 - 使用帧间隔
             frameStep = app.FrameStepSpinner.Value;  % 获取帧间隔
 
-            % 自动播放过程中每帧都强制回到单图原图视图
-            closeAllPreprocessingSubViews(app);
-
             % 计算下一帧位置
             nextIndex = app.CurrentIndex + frameStep;
             
@@ -2566,12 +2563,32 @@ classdef MatViewerTool < matlab.apps.AppBase
                 % 超出范围，循环到开头
                 app.CurrentIndex = 1;
             end
-            
+
             app.FrameSlider.Value = app.CurrentIndex;
+
+            % 自动播放过程中在目标帧强制回到单图原图视图
+            enforceAutoplayOriginalView(app);
+
             displayCurrentImage(app);
             updateFrameInfoDisplay(app);
             updateDisplayButtonsState(app);
             updateImageInfoDisplay(app);  % 更新图像信息
+        end
+
+        function enforceAutoplayOriginalView(app)
+            % 自动播放时强制只展示当前帧原图，清理其他子图
+            app.ShowOriginalCheck.Value = true;
+
+            % 隐藏并清空其他axes，避免上一帧的预处理图残留
+            cla(app.ImageAxes2, 'reset');
+            cla(app.ImageAxes3, 'reset');
+            cla(app.ImageAxes4, 'reset');
+            app.ImageAxes2.Visible = 'off';
+            app.ImageAxes3.Visible = 'off';
+            app.ImageAxes4.Visible = 'off';
+
+            % 直接以当前帧渲染单图原图视图
+            displaySingleView(app);
         end
 
         function closeAllPreprocessingSubViews(app)
