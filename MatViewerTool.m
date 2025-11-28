@@ -1754,8 +1754,8 @@ classdef MatViewerTool < matlab.apps.AppBase
             data = app.MatData{app.CurrentIndex};
 
             % 自动播放时优先使用原始输入（若有raw_matrix），确保仅展示原图
-            if app.AutoPlayActive && isstruct(data) && isfield(data, 'raw_matrix')
-                complexMatrix = data.raw_matrix;
+            if app.AutoPlayActive
+                complexMatrix = getAutoplayOriginalMatrix(app, data);
             else
                 complexMatrix = data.complex_matrix;
             end
@@ -1800,6 +1800,35 @@ classdef MatViewerTool < matlab.apps.AppBase
                     case '3D图像dB'
                         displayMatrixMesh(app, complexMatrix, true);
                 end
+            end
+        end
+
+        function complexMatrix = getAutoplayOriginalMatrix(app, data)
+            % 自动播放时优先获取原始输入矩阵，避免展示预处理结果
+
+            % 1) 首选当前MatData的raw_matrix
+            if isstruct(data) && isfield(data, 'raw_matrix') && ~isempty(data.raw_matrix)
+                complexMatrix = data.raw_matrix;
+                return;
+            end
+
+            % 2) 尝试从预处理结果缓存中找到带raw_matrix的记录
+            if ~isempty(app.PreprocessingResults) && app.CurrentIndex <= size(app.PreprocessingResults, 1)
+                maxCols = min(size(app.PreprocessingResults, 2), 7);
+                for col = 2:maxCols
+                    candidate = app.PreprocessingResults{app.CurrentIndex, col};
+                    if isstruct(candidate) && isfield(candidate, 'raw_matrix') && ~isempty(candidate.raw_matrix)
+                        complexMatrix = candidate.raw_matrix;
+                        return;
+                    end
+                end
+            end
+
+            % 3) 回退到当前数据的complex_matrix（如果缺少raw_matrix）
+            if isstruct(data) && isfield(data, 'complex_matrix')
+                complexMatrix = data.complex_matrix;
+            else
+                complexMatrix = [];
             end
         end
         
