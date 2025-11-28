@@ -1752,7 +1752,13 @@ classdef MatViewerTool < matlab.apps.AppBase
             end
             
             data = app.MatData{app.CurrentIndex};
-            complexMatrix = data.complex_matrix;
+
+            % 自动播放时优先使用原始输入（若有raw_matrix），确保仅展示原图
+            if app.AutoPlayActive && isstruct(data) && isfield(data, 'raw_matrix')
+                complexMatrix = data.raw_matrix;
+            else
+                complexMatrix = data.complex_matrix;
+            end
             
             % 判断文件名是否为SAR
             [~, filename] = fileparts(app.MatFiles{app.CurrentIndex});
@@ -2546,6 +2552,9 @@ classdef MatViewerTool < matlab.apps.AppBase
         function autoPlayNext(app)
             % 自动播放下一帧 - 使用帧间隔
             frameStep = app.FrameStepSpinner.Value;  % 获取帧间隔
+
+            % 自动播放过程中每帧都强制回到单图原图视图
+            closeAllPreprocessingSubViews(app);
 
             % 计算下一帧位置
             nextIndex = app.CurrentIndex + frameStep;
