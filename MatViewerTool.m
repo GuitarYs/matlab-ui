@@ -1294,7 +1294,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         end
 
         function img = readRawImage(app, fullPath)
-            % 读取RAW图像文件，自动尝试按平方尺寸重构
+            % 读取RAW灰度图：默认按8/16bit强度，按接近正方形的尺寸重排
             img = [];
 
             fid = fopen(fullPath, 'r');
@@ -1302,19 +1302,26 @@ classdef MatViewerTool < matlab.apps.AppBase
                 return;
             end
 
-            rawData = fread(fid, inf, 'uint8=>double');
+            % 先尝试以uint16读取（常见SAR幅度存储方式），失败则回落到uint8
+            rawData = fread(fid, inf, 'uint16=>double');
+            if isempty(rawData)
+                frewind(fid);
+                rawData = fread(fid, inf, 'uint8=>double');
+            end
             fclose(fid);
 
             if isempty(rawData)
                 return;
             end
 
-            side = floor(sqrt(numel(rawData)));
+            % 按最接近的平方尺寸重构，便于imshow直接展示
+            side = round(sqrt(numel(rawData)));
             if side < 1
                 return;
             end
 
-            img = reshape(rawData(1:side*side), [side, side]);
+            usableCount = side * side;
+            img = reshape(rawData(1:usableCount), [side, side]);
         end
 
         % ==================== 数据导入函数 ====================
@@ -1616,26 +1623,28 @@ classdef MatViewerTool < matlab.apps.AppBase
             % 更新UI状态
             if app.IsImageDataset
                 app.StatusLabel.Text = sprintf('已加载 %d 个图像文件', length(app.MatData));
+                % 与MAT保持一致的列标题，方便查看“数据类型”
+                app.FieldTable.ColumnName = {'字段', '字段名', '字段值', '数据类型'};
             else
                 app.StatusLabel.Text = sprintf('已加载 %d 个文件', length(app.MatData));
             end
             app.StatusLabel.FontColor = [0 0.5 0];
-            
+
             % 启用控件
             numFrames = length(app.MatData);
             app.FrameSlider.Enable = 'on';
-            
+
             if numFrames > 1
                 app.FrameSlider.Limits = [1 numFrames];
-                
+
                 % 智能计算刻度间隔（目标：显示8-15个刻度）
                 targetTickCount = 10;  % 目标刻度数量
                 rawInterval = numFrames / targetTickCount;
-                
+
                 % 将间隔圆整到合适的值（1, 2, 5, 10, 20, 50, 100, 200, 500, 1000...）
                 magnitude = 10^floor(log10(rawInterval));  % 数量级
                 normalized = rawInterval / magnitude;       % 归一化到1-10
-                
+
                 if normalized < 2
                     tickInterval = 1 * magnitude;
                 elseif normalized < 5
@@ -1645,20 +1654,21 @@ classdef MatViewerTool < matlab.apps.AppBase
                 else
                     tickInterval = 10 * magnitude;
                 end
-                
+
                 % 生成刻度
                 app.FrameSlider.MajorTicks = unique([1:tickInterval:numFrames, numFrames]);
-                
+
                 app.PrevBtn.Enable = 'on';
                 app.NextBtn.Enable = 'on';
                 app.AutoPlayBtn.Enable = 'on';
             else
-                app.FrameSlider.Limits = [1 2];
-                app.FrameSlider.MajorTicks = [1 2];
+                app.FrameSlider.Limits = [1 max(2, numFrames)];
+                app.FrameSlider.MajorTicks = [1 max(2, numFrames)];
                 app.FrameSlider.Enable = 'off';
                 app.PrevBtn.Enable = 'off';
                 app.NextBtn.Enable = 'off';
-                app.AutoPlayBtn.Enable = 'off';
+                % 即使只有一帧也允许自动播放按钮可用，便于循环查看
+                app.AutoPlayBtn.Enable = 'on';
             end
             
             app.FrameSlider.Value = 1;
@@ -2138,7 +2148,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         end
         
         function updateFrameInfoDisplay(app)
-            % 更新帧信息显示（表格方式）
+            % 更新帧信息显示（表格方式，列4显示“数据类型”）
             if isempty(app.MatData) || app.CurrentIndex > length(app.MatData)
                 app.FieldTable.Data = {};
                 return;
@@ -2736,6 +2746,10 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function toggleAutoPlay(app)
             % 切换自动播放状态
+            if isempty(app.MatData)
+                return;
+            end
+
             if app.AutoPlayActive
                 % 停止播放
                 stop(app.AutoPlayTimer);
@@ -2744,10 +2758,13 @@ classdef MatViewerTool < matlab.apps.AppBase
                 app.AutoPlayBtn.BackgroundColor = [0.96 0.96 0.96];
             else
                 % 开始播放
+                app.AutoPlayInterval = app.IntervalSpinner.Value;  % 使用面板上的间隔
                 if isempty(app.AutoPlayTimer) || ~isvalid(app.AutoPlayTimer)
                     app.AutoPlayTimer = timer('ExecutionMode', 'fixedRate', ...
                         'Period', app.AutoPlayInterval, ...
                         'TimerFcn', @(~,~) autoPlayNext(app));
+                else
+                    app.AutoPlayTimer.Period = app.AutoPlayInterval;
                 end
 
                 % 进入自动播放时关闭所有预处理子图，仅保留原图
