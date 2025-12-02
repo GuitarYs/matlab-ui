@@ -2842,7 +2842,11 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.ImageAxes4.Visible = 'off';
 
             % 刷新当前帧显示为单图模式
-            displaySingleView(app);
+            if app.IsImageDataset
+                displayImageFile(app);
+            else
+                displaySingleView(app);
+            end
         end
 
         % ==================== 字段勾选相关函数 ====================
