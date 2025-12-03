@@ -87,7 +87,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         FieldUnits              cell        % 从字段名中提取的单位（如"(m)"）
 
         % 领域字段映射
-        DomainFieldMappings     struct
+        DomainFieldMappings     containers.Map
 
         % 预处理相关
         PreprocessingList       cell        % 预处理配置列表
@@ -137,12 +137,14 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.FieldDisplayNames = {};
             app.FieldUnits = {};
 
-            % 领域字段名称配置
-            app.DomainFieldMappings = struct(...
-                '领域1', {{'领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5'}}, ...
-                '领域2', {{'领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5'}}, ...
-                '领域3', {{'领域3.1', '领域3.2', '领域3.3', '领域3.4', '领域3.5'}}, ...
-                '领域4', {{'领域4.1', '领域4.2', '领域4.3', '领域4.4', '领域4.5'}});
+            % 领域字段名称配置（使用 Map 存储，支持中文键名）
+            domainKeys = {'领域1', '领域2', '领域3', '领域4'};
+            domainValues = {
+                {'领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5'}, ...
+                {'领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5'}, ...
+                {'领域3.1', '领域3.2', '领域3.3', '领域3.4', '领域3.5'}, ...
+                {'领域4.1', '领域4.2', '领域4.3', '领域4.4', '领域4.5'}};
+            app.DomainFieldMappings = containers.Map(domainKeys, domainValues);
 
             app.PreprocessingList = {};
             app.PreprocessingResults = {};
@@ -1298,8 +1300,8 @@ classdef MatViewerTool < matlab.apps.AppBase
                 end
             end
 
-            if ~isempty(domainKey) && isfield(app.DomainFieldMappings, domainKey)
-                fieldNames = app.DomainFieldMappings.(domainKey);
+            if ~isempty(domainKey) && isKey(app.DomainFieldMappings, domainKey)
+                fieldNames = app.DomainFieldMappings(domainKey);
                 return;
             end
 
