@@ -1284,16 +1284,16 @@ classdef MatViewerTool < matlab.apps.AppBase
                 displayName = sprintf('字段%02d', i);
 
                 if startsWith(headerStr, '领域1')
-                    displayName = selectDomainDisplayName(domainNameTemplates, 1, domainCounters(1), defaultNames, i);
+                    displayName = selectDomainDisplayName(domainNameTemplates, 1, domainCounters(1));
                     domainCounters(1) = domainCounters(1) + 1;
                 elseif startsWith(headerStr, '领域2')
-                    displayName = selectDomainDisplayName(domainNameTemplates, 2, domainCounters(2), defaultNames, i);
+                    displayName = selectDomainDisplayName(domainNameTemplates, 2, domainCounters(2));
                     domainCounters(2) = domainCounters(2) + 1;
                 elseif startsWith(headerStr, '领域3')
-                    displayName = selectDomainDisplayName(domainNameTemplates, 3, domainCounters(3), defaultNames, i);
+                    displayName = selectDomainDisplayName(domainNameTemplates, 3, domainCounters(3));
                     domainCounters(3) = domainCounters(3) + 1;
                 elseif startsWith(headerStr, '领域4')
-                    displayName = selectDomainDisplayName(domainNameTemplates, 4, domainCounters(4), defaultNames, i);
+                    displayName = selectDomainDisplayName(domainNameTemplates, 4, domainCounters(4));
                     domainCounters(4) = domainCounters(4) + 1;
                 end
 
@@ -1312,8 +1312,8 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.FieldUnits = units;
         end
 
-        function displayName = selectDomainDisplayName(domainNameTemplates, domainIdx, domainCounter, defaultNames, fieldIdx)
-            % 根据领域索引和计数，从模板中选择对应的显示名称；不足时退回默认字段名
+        function displayName = selectDomainDisplayName(domainNameTemplates, domainIdx, domainCounter)
+            % 根据领域索引和计数，从模板中选择对应的显示名称；不足时退回默认的领域编号格式
             displayName = '';
 
             if domainIdx <= numel(domainNameTemplates)
@@ -1324,11 +1324,7 @@ classdef MatViewerTool < matlab.apps.AppBase
             end
 
             if isempty(displayName)
-                if fieldIdx <= numel(defaultNames)
-                    displayName = defaultNames{fieldIdx};
-                else
-                    displayName = sprintf('字段%02d', fieldIdx);
-                end
+                displayName = sprintf('领域%d.%d', domainIdx, domainCounter);
             end
         end
 
@@ -7143,7 +7139,8 @@ classdef MatViewerTool < matlab.apps.AppBase
         end
 
         function domainNameTemplates = getDomainNameTemplates(~)
-            % 配置各领域的显示名称模板，便于后续直接修改或扩展
+            % 配置各领域的显示名称模板，可直接把对应序号的字段改成自定义字符串
+            %（留空则自动使用“领域X.n”默认编号）。
             domainNameTemplates = {
                 {'领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5'};  % 领域1
                 {'领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5'};  % 领域2
