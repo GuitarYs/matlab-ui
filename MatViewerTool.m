@@ -131,8 +131,7 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.AutoPlayInterval = 5;  % 5秒
             app.IsImageDataset = false;
             app.DomainFieldList = {};
-            app.FieldDisplayNames = {};
-            app.FieldUnits = {};
+            [app.FieldDisplayNames, app.FieldUnits] = getDefaultFieldDisplayNames(app);
 
             app.PreprocessingList = {};
             app.PreprocessingResults = {};
@@ -1079,12 +1078,7 @@ classdef MatViewerTool < matlab.apps.AppBase
 
                 % 放开目录层级限制：对所有层级都尝试读取Excel和子目录信息
                 % 原来只对3级和4级目录读取，现在对所有层级都读取
-                updateBgInfoFromExcel(app, selectedPath);
                 updateSubdirDisplay(app, selectedPath);
-
-                % 读取对应第一级目录的Excel字段名和单位（用于帧信息显示区）
-                % 如果没有Excel文件，readFieldNamesFromLevel1Excel会返回空数组，会使用默认字段名（字段1、字段2等）
-                [app.FieldDisplayNames, app.FieldUnits] = readFieldNamesFromLevel1Excel(app, selectedPath);
 
                 % 将GUI窗口置顶
                 figure(app.UIFigure);
@@ -1095,68 +1089,82 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function updateExcelInfo(app, folderPath)
             % 更新Excel信息显示
-            excelData = readExcelFile(app, folderPath);
-            
+            excelData = readExcelFile(app, folderPath, true);
+
             if ~isempty(excelData)
                 app.ExcelTable.Data = excelData;
             else
                 app.ExcelTable.Data = {};
             end
         end
-        
-        function excelData = readExcelFile(app, folderPath)
-            % 读取试验背景信息Excel文件（只从3级或4级目录读取）
-            % 优先读取4级目录的Excel，如果4级没有则读取3级的Excel
+
+        function excelData = readExcelFile(app, folderPath, allowManualImport)
+            % 读取试验背景信息Excel文件（优先当前目录，其次上级目录）
+            % allowManualImport: 当自动查找失败时，是否允许弹窗选择Excel
+            if nargin < 3
+                allowManualImport = false;
+            end
+
             excelData = {};
 
             if ~isfolder(folderPath)
                 return;
             end
 
-            % 计算当前目录层级
-            relativePath = strrep(folderPath, app.CurrentDataPath, '');
-            pathParts = strsplit(relativePath, filesep);
-            pathParts = pathParts(~cellfun(@isempty, pathParts));
-            currentLevel = length(pathParts);
+            searchPaths = {folderPath};
 
-            % 只从3级或4级目录读取背景信息
-            if currentLevel ~= 3 && currentLevel ~= 4
-                return;
+            % 在上一级目录兜底查找
+            parentPath = fileparts(folderPath);
+            if ~strcmp(parentPath, folderPath) && isfolder(parentPath)
+                searchPaths{end+1} = parentPath; %#ok<AGROW>
             end
 
             excelFilePath = '';
 
-            % 如果是4级目录，优先在4级查找Excel
-            if currentLevel == 4
-                excelFiles = dir(fullfile(folderPath, '*.xlsx'));
+            % 依次在当前目录及上一级目录查找Excel
+            for pathIdx = 1:numel(searchPaths)
+                currentSearchPath = searchPaths{pathIdx};
+                excelFiles = dir(fullfile(currentSearchPath, '*.xlsx'));
                 if isempty(excelFiles)
-                    excelFiles = dir(fullfile(folderPath, '*.xls'));
+                    excelFiles = dir(fullfile(currentSearchPath, '*.xls'));
                 end
 
                 if ~isempty(excelFiles)
-                    % 4级目录找到Excel
-                    excelFilePath = fullfile(folderPath, excelFiles(1).name);
+                    excelFilePath = fullfile(currentSearchPath, excelFiles(1).name);
+                    break;
+                end
+            end
+
+            % 未找到时允许用户手动导入
+            if isempty(excelFilePath)
+                if ~allowManualImport
+                    return;
+                end
+
+                userChoice = uiconfirm(app.UIFigure, ...
+                    ['未在所选目录或上一级目录找到Excel文件。', newline, ...
+                    '是否手动选择试验背景信息Excel？'], ...
+                    '未找到Excel', ...
+                    'Options', {'自定义导入Excel', '关闭'}, ...
+                    'DefaultOption', '自定义导入Excel', ...
+                    'CancelOption', '关闭');
+
+                figure(app.UIFigure);
+
+                if strcmp(userChoice, '自定义导入Excel')
+                    [fileName, filePath] = uigetfile({ ...
+                        '*.xlsx', 'Excel 文件 (*.xlsx)'}, ...
+                        '选择试验背景信息Excel', folderPath);
+
+                    figure(app.UIFigure);
+
+                    if isequal(fileName, 0)
+                        return;
+                    end
+
+                    excelFilePath = fullfile(filePath, fileName);
                 else
-                    % 4级没有，向上找3级目录的Excel
-                    parentPath = fileparts(folderPath);
-                    parentExcelFiles = dir(fullfile(parentPath, '*.xlsx'));
-                    if isempty(parentExcelFiles)
-                        parentExcelFiles = dir(fullfile(parentPath, '*.xls'));
-                    end
-
-                    if ~isempty(parentExcelFiles)
-                        excelFilePath = fullfile(parentPath, parentExcelFiles(1).name);
-                    end
-                end
-            elseif currentLevel == 3
-                % 如果是3级目录，直接在3级查找Excel
-                excelFiles = dir(fullfile(folderPath, '*.xlsx'));
-                if isempty(excelFiles)
-                    excelFiles = dir(fullfile(folderPath, '*.xls'));
-                end
-
-                if ~isempty(excelFiles)
-                    excelFilePath = fullfile(folderPath, excelFiles(1).name);
+                    return;
                 end
             end
             
@@ -1402,9 +1410,6 @@ classdef MatViewerTool < matlab.apps.AppBase
                 app.FieldTable.Data = {};
                 app.FieldTable.ColumnName = {'字段', '值', '类型'};
             end
-
-            % 读取第一级目录Excel中的字段显示名称和单位
-            [app.FieldDisplayNames, app.FieldUnits] = readFieldNamesFromLevel1Excel(app, selectedPath);
 
             % 创建进度对话框
             progressMessage = '正在加载MAT文件...';
@@ -7040,6 +7045,18 @@ classdef MatViewerTool < matlab.apps.AppBase
                     '读取Excel文件失败: %s\n文件路径: %s', ...
                     ME.message, excelPath);
             end
+        end
+
+        function [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(~)
+            % 返回帧信息显示区的默认字段名称和单位
+            defaultNames = {
+                '领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5', ...
+                '领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5', ...
+                '领域3.1', '领域3.2', '领域3.3', '领域3.4', '领域3.5', ...
+                '领域4.1', '领域4.2', '领域4.3', '领域4.4', '领域4.5' ...
+            };
+
+            defaultUnits = repmat({''}, 1, numel(defaultNames));
         end
 
         function executePrepOnCurrentFrame(app, prepIndex)
