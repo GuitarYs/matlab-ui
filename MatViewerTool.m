@@ -79,6 +79,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         AutoPlayTimer           timer
         AutoPlayActive          logical
         AutoPlayInterval        double
+        IsImageDataset          logical
         
         % 域Excel字段
         DomainFieldList         cell
@@ -128,6 +129,7 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.SelectedExperiment = '';
             app.AutoPlayActive = false;
             app.AutoPlayInterval = 5;  % 5秒
+            app.IsImageDataset = false;
             app.DomainFieldList = {};
             app.FieldDisplayNames = {};
             app.FieldUnits = {};
@@ -1290,7 +1292,38 @@ classdef MatViewerTool < matlab.apps.AppBase
                 app.SubdirListBox.Items = {'(无子目录)'};
             end
         end
-        
+
+        function img = readRawImage(app, fullPath)
+            % 读取RAW灰度图：默认按8/16bit强度，按接近正方形的尺寸重排
+            img = [];
+
+            fid = fopen(fullPath, 'r');
+            if fid == -1
+                return;
+            end
+
+            % 先尝试以uint16读取（常见SAR幅度存储方式），失败则回落到uint8
+            rawData = fread(fid, inf, 'uint16=>double');
+            if isempty(rawData)
+                frewind(fid);
+                rawData = fread(fid, inf, 'uint8=>double');
+            end
+            fclose(fid);
+
+            if isempty(rawData)
+                return;
+            end
+
+            % 按最接近的平方尺寸重构，便于imshow直接展示
+            side = round(sqrt(numel(rawData)));
+            if side < 1
+                return;
+            end
+
+            usableCount = side * side;
+            img = reshape(rawData(1:usableCount), [side, side]);
+        end
+
         % ==================== 数据导入函数 ====================
         
         function importFiles(app)
@@ -1314,10 +1347,14 @@ classdef MatViewerTool < matlab.apps.AppBase
             else
                 startPath = pwd;
             end
-            
+
             % 打开文件选择对话框
-            [selectedFiles, selectedPath] = uigetfile('*.mat', '选择MAT文件', ...
-                startPath, 'MultiSelect', 'on');
+            [selectedFiles, selectedPath] = uigetfile({ ...
+                '*.bmp;*.raw', 'SAR 图像文件 (*.bmp, *.raw)'; ...
+                '*.bmp', 'BMP 图片 (*.bmp)'; ...
+                '*.raw', 'RAW 图片 (*.raw)'; ...
+                '*.mat', 'MAT 文件 (*.mat)'}, ...
+                '选择文件', startPath, 'MultiSelect', 'on');
 
             % 文件选择后置顶UI（无论是否取消）
             figure(app.UIFigure);
@@ -1341,35 +1378,86 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.PreprocessingResults = {};
             app.CurrentPrepIndex = 1;  % 重置为原图
 
+            % 判断是否导入BMP/RAW图片
+            extensions = cell(size(selectedFiles));
+            for extIdx = 1:length(selectedFiles)
+                [~, ~, ext] = fileparts(selectedFiles{extIdx});
+                extensions{extIdx} = lower(ext);
+            end
+            hasMatFiles = any(strcmp(extensions, '.mat'));
+            hasImageFiles = any(strcmp(extensions, '.bmp') | strcmp(extensions, '.raw'));
+
+            if hasMatFiles && hasImageFiles
+                uialert(app.UIFigure, '暂不支持同时导入MAT与BMP/RAW文件，请分开选择。', '提示');
+                return;
+            end
+
+            app.IsImageDataset = hasImageFiles && ~hasMatFiles;
+
+            % 如果是图像数据集，清空字段表和勾选框，避免残留MAT数据
+            if app.IsImageDataset
+                delete(app.FieldCheckboxPanel.Children);
+                app.FieldCheckboxes = {};
+                app.AllFields = {};
+                app.FieldTable.Data = {};
+                app.FieldTable.ColumnName = {'字段', '值', '类型'};
+            end
+
             % 读取第一级目录Excel中的字段显示名称和单位
             [app.FieldDisplayNames, app.FieldUnits] = readFieldNamesFromLevel1Excel(app, selectedPath);
 
             % 创建进度对话框
+            progressMessage = '正在加载MAT文件...';
+            if app.IsImageDataset
+                progressMessage = '正在加载图像文件...';
+            end
+
             d = uiprogressdlg(app.UIFigure, 'Title', '加载数据', ...
-                'Message', '正在加载MAT文件...', 'Cancelable', 'on');
-            
+                'Message', progressMessage, 'Cancelable', 'on');
+
             % 加载文件
             successCount = 0;
-            
+
             for i = 1:length(selectedFiles)
                 d.Value = i / length(selectedFiles);
                 d.Message = sprintf('加载文件 %d/%d: %s', i, length(selectedFiles), selectedFiles{i});
-                
+
                 if d.CancelRequested
                     break;
                 end
-                
+
                 try
                     fullPath = fullfile(selectedPath, selectedFiles{i});
-                    
+
                     if ~isfile(fullPath)
                         continue;
                     end
-                    
+
+                    if app.IsImageDataset
+                        data = struct();
+                        [~, ~, ext] = fileparts(fullPath);
+                        if strcmpi(ext, '.bmp')
+                            data.image_matrix = imread(fullPath);
+                        elseif strcmpi(ext, '.raw')
+                            data.image_matrix = readRawImage(app, fullPath);
+                        end
+
+                        if ~isfield(data, 'image_matrix') || isempty(data.image_matrix)
+                            continue;
+                        end
+
+                        data.source_type = 'image';
+
+                        app.MatFiles{end+1} = fullPath;
+                        app.MatData{end+1} = data;
+                        successCount = successCount + 1;
+                        continue;
+                    end
+
                     % 容错加载方法
                     loadSuccess = false;
                     data = struct();
-                    
+
                     % 方法1: 尝试 load
                     try
                         data = load(fullPath);
@@ -1377,21 +1465,21 @@ classdef MatViewerTool < matlab.apps.AppBase
                     catch
                         % load 失败，尝试 matfile
                     end
-                    
+
                     % 方法2: 使用 matfile 逐个读取（跳过损坏变量）
                     if ~loadSuccess
                         try
                             m = matfile(fullPath);
                             varList = who(m);
-                            
+
                             for vIdx = 1:length(varList)
                                 varName = varList{vIdx};
-                                
+
                                 % 跳过元数据
                                 if startsWith(varName, '__')
                                     continue;
                                 end
-                                
+
                                 try
                                     % 尝试读取该变量
                                     data.(varName) = m.(varName);
@@ -1400,7 +1488,7 @@ classdef MatViewerTool < matlab.apps.AppBase
                                     data.(varName) = '(读取失败)';
                                 end
                             end
-                            
+
                         catch
                             % matfile 也失败，跳过该文件
                             continue;
@@ -1533,24 +1621,30 @@ classdef MatViewerTool < matlab.apps.AppBase
             end
 
             % 更新UI状态
-            app.StatusLabel.Text = sprintf('已加载 %d 个文件', length(app.MatData));
+            if app.IsImageDataset
+                app.StatusLabel.Text = sprintf('已加载 %d 个图像文件', length(app.MatData));
+                % 与MAT保持一致的列标题，方便查看“数据类型”
+                app.FieldTable.ColumnName = {'字段', '字段名', '字段值', '数据类型'};
+            else
+                app.StatusLabel.Text = sprintf('已加载 %d 个文件', length(app.MatData));
+            end
             app.StatusLabel.FontColor = [0 0.5 0];
-            
+
             % 启用控件
             numFrames = length(app.MatData);
             app.FrameSlider.Enable = 'on';
-            
+
             if numFrames > 1
                 app.FrameSlider.Limits = [1 numFrames];
-                
+
                 % 智能计算刻度间隔（目标：显示8-15个刻度）
                 targetTickCount = 10;  % 目标刻度数量
                 rawInterval = numFrames / targetTickCount;
-                
+
                 % 将间隔圆整到合适的值（1, 2, 5, 10, 20, 50, 100, 200, 500, 1000...）
                 magnitude = 10^floor(log10(rawInterval));  % 数量级
                 normalized = rawInterval / magnitude;       % 归一化到1-10
-                
+
                 if normalized < 2
                     tickInterval = 1 * magnitude;
                 elseif normalized < 5
@@ -1560,26 +1654,32 @@ classdef MatViewerTool < matlab.apps.AppBase
                 else
                     tickInterval = 10 * magnitude;
                 end
-                
+
                 % 生成刻度
                 app.FrameSlider.MajorTicks = unique([1:tickInterval:numFrames, numFrames]);
-                
+
                 app.PrevBtn.Enable = 'on';
                 app.NextBtn.Enable = 'on';
                 app.AutoPlayBtn.Enable = 'on';
             else
-                app.FrameSlider.Limits = [1 2];
-                app.FrameSlider.MajorTicks = [1 2];
+                app.FrameSlider.Limits = [1 max(2, numFrames)];
+                app.FrameSlider.MajorTicks = [1 max(2, numFrames)];
                 app.FrameSlider.Enable = 'off';
                 app.PrevBtn.Enable = 'off';
                 app.NextBtn.Enable = 'off';
-                app.AutoPlayBtn.Enable = 'off';
+                % 即使只有一帧也允许自动播放按钮可用，便于循环查看
+                app.AutoPlayBtn.Enable = 'on';
             end
             
             app.FrameSlider.Value = 1;
             app.JumpBtn.Enable = 'on';
-            app.SelectAllBtn.Enable = 'on';
-            app.DeselectAllBtn.Enable = 'on';
+            if app.IsImageDataset
+                app.SelectAllBtn.Enable = 'off';
+                app.DeselectAllBtn.Enable = 'off';
+            else
+                app.SelectAllBtn.Enable = 'on';
+                app.DeselectAllBtn.Enable = 'on';
+            end
             app.ExportBtn.Enable = 'on';
             
             % 显示第一帧
@@ -1590,24 +1690,31 @@ classdef MatViewerTool < matlab.apps.AppBase
             updateDisplayButtonsState(app);
             updateImageInfoDisplay(app);
 
-            % 创建字段复选框
-            createFieldCheckboxes(app);
-            
-            % 启用预处理功能
-            app.AddPrepBtn.Enable = 'on';
-            app.ShowPrep2Btn.Enable = 'on';  % 启用非相参积累按钮
-            app.ShowPrep1Btn.Enable = 'on';  % 启用CFAR检测按钮
-            app.ShowCoherentBtn.Enable = 'off';  % 非相参识别按钮初始禁用
-            app.ShowDetectionBtn.Enable = 'off';  % 多维识别按钮初始禁用
+            % 播放方式配置
+            configurePlayModeForData(app, app.IsImageDataset);
 
-            % 初始化预处理结果存储
-            % 列：1=保留, 2=CFAR, 3=非相参积累, 4=自定义, 5=相参积累, 6=检测, 7=识别
-            if isempty(app.PreprocessingResults)
-                app.PreprocessingResults = cell(length(app.MatData), 7);
+            if app.IsImageDataset
+                lockImageOnlyUI(app);
+            else
+                % 创建字段复选框
+                createFieldCheckboxes(app);
+
+                % 启用预处理功能
+                app.AddPrepBtn.Enable = 'on';
+                app.ShowPrep2Btn.Enable = 'on';  % 启用非相参积累按钮
+                app.ShowPrep1Btn.Enable = 'on';  % 启用CFAR检测按钮
+                app.ShowCoherentBtn.Enable = 'off';  % 非相参识别按钮初始禁用
+                app.ShowDetectionBtn.Enable = 'off';  % 多维识别按钮初始禁用
+
+                % 初始化预处理结果存储
+                % 列：1=保留, 2=CFAR, 3=非相参积累, 4=自定义, 5=相参积累, 6=检测, 7=识别
+                if isempty(app.PreprocessingResults)
+                    app.PreprocessingResults = cell(length(app.MatData), 7);
+                end
+
+                % 更新预处理控件显示（重置为初始状态）
+                updatePreprocessingControls(app);
             end
-
-            % 更新预处理控件显示（重置为初始状态）
-            updatePreprocessingControls(app);
 
             % 将GUI窗口置顶
             figure(app.UIFigure);
@@ -1714,27 +1821,31 @@ classdef MatViewerTool < matlab.apps.AppBase
                 return;
             end
 
-            % 自动播放时强制仅显示原图，关闭其他子图
-            if app.AutoPlayActive
-                displaySingleView(app);
+            if app.IsImageDataset
+                displayImageFile(app);
             else
-                % 判断当前帧是否有预处理结果
-                hasResults = false;
-                if ~isempty(app.PreprocessingResults) && app.CurrentIndex <= size(app.PreprocessingResults, 1)
-                    % 检查是否有任何预处理结果（第2-4列）
-                    for i = 2:4
-                        if ~isempty(app.PreprocessingResults{app.CurrentIndex, i})
-                            hasResults = true;
-                            break;
+                % 自动播放时强制仅显示原图，关闭其他子图
+                if app.AutoPlayActive
+                    displaySingleView(app);
+                else
+                    % 判断当前帧是否有预处理结果
+                    hasResults = false;
+                    if ~isempty(app.PreprocessingResults) && app.CurrentIndex <= size(app.PreprocessingResults, 1)
+                        % 检查是否有任何预处理结果（第2-4列）
+                        for i = 2:4
+                            if ~isempty(app.PreprocessingResults{app.CurrentIndex, i})
+                                hasResults = true;
+                                break;
+                            end
                         end
                     end
-                end
 
-                % 如果有预处理结果，使用多视图显示；否则使用单视图
-                if hasResults
-                    updateMultiView(app);
-                else
-                    displaySingleView(app);
+                    % 如果有预处理结果，使用多视图显示；否则使用单视图
+                    if hasResults
+                        updateMultiView(app);
+                    else
+                        displaySingleView(app);
+                    end
                 end
             end
             
@@ -1801,6 +1912,43 @@ classdef MatViewerTool < matlab.apps.AppBase
                         displayMatrixMesh(app, complexMatrix, true);
                 end
             end
+        end
+
+        function displayImageFile(app)
+            % 显示BMP/RAW等直接加载的图像
+
+            % 隐藏其他视图并清空
+            app.ImageAxes2.Visible = 'off';
+            app.ImageAxes3.Visible = 'off';
+            app.ImageAxes4.Visible = 'off';
+            app.ImageAxes1.Visible = 'on';
+            app.ImageAxes1.Layout.Row = [1 2];
+            app.ImageAxes1.Layout.Column = [1 2];
+
+            cla(app.ImageAxes1);
+            cla(app.ImageAxes2);
+            cla(app.ImageAxes3);
+            cla(app.ImageAxes4);
+
+            data = app.MatData{app.CurrentIndex};
+            if ~isfield(data, 'image_matrix')
+                return;
+            end
+
+            img = data.image_matrix;
+
+            view(app.ImageAxes1, 2);
+
+            if isnumeric(img) && isfloat(img)
+                imshow(mat2gray(img), 'Parent', app.ImageAxes1);
+            else
+                imshow(img, 'Parent', app.ImageAxes1);
+            end
+
+            axis(app.ImageAxes1, 'on');
+            app.ImageAxes1.XTickMode = 'auto';
+            app.ImageAxes1.YTickMode = 'auto';
+            app.ImageAxes1.Box = 'on';
         end
 
         function complexMatrix = getAutoplayOriginalMatrix(app, data)
@@ -2000,7 +2148,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         end
         
         function updateFrameInfoDisplay(app)
-            % 更新帧信息显示（表格方式）
+            % 更新帧信息显示（表格方式，列4显示“数据类型”）
             if isempty(app.MatData) || app.CurrentIndex > length(app.MatData)
                 app.FieldTable.Data = {};
                 return;
@@ -2376,6 +2524,11 @@ classdef MatViewerTool < matlab.apps.AppBase
                 app.SARBtn.Enable = 'off';
                 return;
             end
+
+            if app.IsImageDataset
+                lockImageOnlyUI(app);
+                return;
+            end
             
             % 判断文件名是否为SAR
             [~, filename] = fileparts(app.MatFiles{app.CurrentIndex});
@@ -2414,7 +2567,46 @@ classdef MatViewerTool < matlab.apps.AppBase
                 app.SARBtn.Enable = 'off';
             end
         end
-        
+
+        function configurePlayModeForData(app, isImageDataset)
+            % 根据数据类型配置播放方式下拉框
+            if isImageDataset
+                app.PlayModeCombo.Items = {'原图'};
+                app.PlayModeCombo.Value = '原图';
+                app.PlayModeCombo.Enable = 'off';
+            else
+                app.PlayModeCombo.Items = {'原图', '原图dB', '3D图像', '3D图像dB'};
+                if ~ismember(app.PlayModeCombo.Value, app.PlayModeCombo.Items)
+                    app.PlayModeCombo.Value = '原图';
+                end
+                app.PlayModeCombo.Enable = 'on';
+            end
+        end
+
+        function lockImageOnlyUI(app)
+            % SAR BMP/RAW 图像仅允许原图播放，其他功能置灰
+            configurePlayModeForData(app, true);
+            app.WaveformBtn.Enable = 'off';
+            app.OriginalBtn.Enable = 'off';
+            app.DbBtn.Enable = 'off';
+            app.Mesh3DBtn.Enable = 'off';
+            app.DbMesh3DBtn.Enable = 'off';
+            app.SARBtn.Enable = 'off';
+
+            disablePreprocessingControls(app);
+        end
+
+        function disablePreprocessingControls(app)
+            % 将所有预处理相关控件置灰
+            app.ShowPrep1Btn.Enable = 'off';
+            app.ShowPrep2Btn.Enable = 'off';
+            app.ShowCoherentBtn.Enable = 'off';
+            app.ShowDetectionBtn.Enable = 'off';
+            app.ShowPrep3Btn.Enable = 'off';
+            app.AddPrepBtn.Enable = 'off';
+            app.ClearPrepBtn.Enable = 'off';
+        end
+
         % ==================== 帧控制函数 ====================
         
         function onSliderChange(app, event)
@@ -2554,6 +2746,10 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function toggleAutoPlay(app)
             % 切换自动播放状态
+            if isempty(app.MatData)
+                return;
+            end
+
             if app.AutoPlayActive
                 % 停止播放
                 stop(app.AutoPlayTimer);
@@ -2562,10 +2758,13 @@ classdef MatViewerTool < matlab.apps.AppBase
                 app.AutoPlayBtn.BackgroundColor = [0.96 0.96 0.96];
             else
                 % 开始播放
+                app.AutoPlayInterval = app.IntervalSpinner.Value;  % 使用面板上的间隔
                 if isempty(app.AutoPlayTimer) || ~isvalid(app.AutoPlayTimer)
                     app.AutoPlayTimer = timer('ExecutionMode', 'fixedRate', ...
                         'Period', app.AutoPlayInterval, ...
                         'TimerFcn', @(~,~) autoPlayNext(app));
+                else
+                    app.AutoPlayTimer.Period = app.AutoPlayInterval;
                 end
 
                 % 进入自动播放时关闭所有预处理子图，仅保留原图
@@ -2617,7 +2816,11 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.ImageAxes4.Visible = 'off';
 
             % 直接以当前帧渲染单图原图视图
-            displaySingleView(app);
+            if app.IsImageDataset
+                displayImageFile(app);
+            else
+                displaySingleView(app);
+            end
         end
 
         function closeAllPreprocessingSubViews(app)
@@ -2639,7 +2842,11 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.ImageAxes4.Visible = 'off';
 
             % 刷新当前帧显示为单图模式
-            displaySingleView(app);
+            if app.IsImageDataset
+                displayImageFile(app);
+            else
+                displaySingleView(app);
+            end
         end
 
         % ==================== 字段勾选相关函数 ====================
@@ -5363,6 +5570,11 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function updatePreprocessingControls(app)
             % 更新预处理控件状态
+
+            if app.IsImageDataset
+                disablePreprocessingControls(app);
+                return;
+            end
 
             numPreps = length(app.PreprocessingList);
 
