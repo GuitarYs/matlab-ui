@@ -1095,19 +1095,28 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function updateExcelInfo(app, folderPath)
             % 更新Excel信息显示
-            excelData = readExcelFile(app, folderPath);
-            
+            excelData = readExcelFile(app, folderPath, true);
+
             if ~isempty(excelData)
                 app.ExcelTable.Data = excelData;
             else
                 app.ExcelTable.Data = {};
             end
         end
-        
-        function excelData = readExcelFile(app, folderPath)
-            % 读取试验背景信息Excel文件（只从3级或4级目录读取）
-            % 优先读取4级目录的Excel，如果4级没有则读取3级的Excel
+
+        function [excelData, excelFilePath] = readExcelFile(app, folderPath, showPrompt)
+            % 读取试验背景信息Excel文件
+            % 查找逻辑：
+            %   - 目录层级>=4：优先使用第4级目录，其次第3级目录
+            %   - 目录层级<4：优先使用最后一级目录，其次倒数第二级目录
+            % 未找到时支持用户自定义导入.xlsx文件
+
+            if nargin < 3
+                showPrompt = true;
+            end
+
             excelData = {};
+            excelFilePath = '';
 
             if ~isfolder(folderPath)
                 return;
@@ -1119,143 +1128,166 @@ classdef MatViewerTool < matlab.apps.AppBase
             pathParts = pathParts(~cellfun(@isempty, pathParts));
             currentLevel = length(pathParts);
 
-            % 只从3级或4级目录读取背景信息
-            if currentLevel ~= 3 && currentLevel ~= 4
-                return;
-            end
-
-            excelFilePath = '';
-
-            % 如果是4级目录，优先在4级查找Excel
-            if currentLevel == 4
-                excelFiles = dir(fullfile(folderPath, '*.xlsx'));
-                if isempty(excelFiles)
-                    excelFiles = dir(fullfile(folderPath, '*.xls'));
-                end
-
-                if ~isempty(excelFiles)
-                    % 4级目录找到Excel
-                    excelFilePath = fullfile(folderPath, excelFiles(1).name);
-                else
-                    % 4级没有，向上找3级目录的Excel
-                    parentPath = fileparts(folderPath);
-                    parentExcelFiles = dir(fullfile(parentPath, '*.xlsx'));
-                    if isempty(parentExcelFiles)
-                        parentExcelFiles = dir(fullfile(parentPath, '*.xls'));
-                    end
-
-                    if ~isempty(parentExcelFiles)
-                        excelFilePath = fullfile(parentPath, parentExcelFiles(1).name);
-                    end
-                end
-            elseif currentLevel == 3
-                % 如果是3级目录，直接在3级查找Excel
-                excelFiles = dir(fullfile(folderPath, '*.xlsx'));
-                if isempty(excelFiles)
-                    excelFiles = dir(fullfile(folderPath, '*.xls'));
-                end
-
-                if ~isempty(excelFiles)
-                    excelFilePath = fullfile(folderPath, excelFiles(1).name);
+            % 根据层级生成候选搜索路径
+            candidatePaths = {};
+            if currentLevel >= 4
+                % 使用第4级目录，然后回退到第3级目录
+                level3Path = fullfile(app.CurrentDataPath, pathParts{1}, pathParts{2}, pathParts{3});
+                level4Path = fullfile(level3Path, pathParts{4});
+                candidatePaths = {level4Path, level3Path};
+            elseif currentLevel >= 1
+                % 使用当前路径，然后回退到上一级（若有）
+                currentPathFull = fullfile(app.CurrentDataPath, pathParts{:});
+                candidatePaths = {currentPathFull};
+                if currentLevel >= 2
+                    parentPath = fullfile(app.CurrentDataPath, pathParts{1:end-1});
+                    candidatePaths{end+1} = parentPath; %#ok<AGROW>
                 end
             end
-            
+
+            % 查找Excel文件（优先.xlsx，再回退.xls）
+            for idx = 1:length(candidatePaths)
+                excelFilePath = locateExcelInFolder(candidatePaths{idx});
+                if ~isempty(excelFilePath)
+                    break;
+                end
+            end
+
+            % 未找到Excel时提示自定义导入
+            if isempty(excelFilePath) && showPrompt
+                choice = uiconfirm(app.UIFigure, ...
+                    '未找到Excel文件，是否手动导入？', ...
+                    '未找到Excel', ...
+                    'Options', {'自定义导入Excel', '关闭'}, ...
+                    'DefaultOption', 2, ...
+                    'CancelOption', 2);
+
+                if strcmp(choice, '自定义导入Excel')
+                    [fileName, filePath] = uigetfile({'*.xlsx', 'Excel 文件 (*.xlsx)'}, ...
+                        '选择Excel文件', folderPath);
+                    figure(app.UIFigure);  % 置顶主界面
+                    if ~isequal(fileName, 0)
+                        excelFilePath = fullfile(filePath, fileName);
+                    end
+                end
+            end
+
+            % 读取Excel内容
             if isempty(excelFilePath)
                 return;
             end
-            
+
             try
-                % 读取Excel文件 (使用 readcell 替代 xlsread)
-                raw = readcell(excelFilePath);
-                
-                % Excel格式：第1行从B1开始是字段，第2行从B2开始是值
-                if size(raw, 1) >= 2 && size(raw, 2) >= 2
-                    % 从第2列（B列）开始读取
-                    headers = raw(1, 2:end);
-                    values = raw(2, 2:end);
-                    
-                    % 过滤掉空字段
-                    validIdx = ~cellfun(@(x) isempty(x) || ...
-                        (ischar(x) && isempty(strtrim(x))) || ...
-                        (isnumeric(x) && isnan(x)), headers);
-                    
-                    if any(validIdx)
-                        % 转换为字符串
-                        headers = headers(validIdx);
-                        values = values(validIdx);
-                        
-                        % 确保 headers 也是字符串
-                        for i = 1:length(headers)
-                            if ~ischar(headers{i}) && ~isstring(headers{i})
-                                if isnumeric(headers{i})
-                                    headers{i} = num2str(headers{i});
-                                elseif isdatetime(headers{i})
-                                    headers{i} = char(headers{i});
-                                else
-                                    try
-                                        headers{i} = char(string(headers{i}));
-                                    catch
-                                        headers{i} = sprintf('字段%d', i);
-                                    end
-                                end
-                            end
-                        end
-                        
-                        % 将所有值转换为字符串（处理各种数据类型）
-                        for i = 1:length(values)
-                            if isempty(values{i})
-                                values{i} = '';
-                            elseif isnumeric(values{i})
-                                if isnan(values{i})
-                                    values{i} = '';
-                                else
-                                    values{i} = num2str(values{i});
-                                end
-                            elseif isdatetime(values{i})
-                                % datetime 类型转换为字符串
-                                values{i} = char(values{i});
-                            elseif isduration(values{i})
-                                % duration 类型转换为字符串
-                                values{i} = char(values{i});
-                            elseif islogical(values{i})
-                                % logical 类型转换为字符串
-                                values{i} = char(string(values{i}));
-                            elseif iscell(values{i})
-                                % 嵌套的 cell，尝试转换
-                                values{i} = '{cell}';
-                            elseif isstruct(values{i})
-                                % struct 类型
-                                values{i} = '{struct}';
-                            elseif ~ischar(values{i}) && ~isstring(values{i})
-                                % 其他未知类型，尝试转换为字符串
-                                try
-                                    values{i} = char(string(values{i}));
-                                catch
-                                    values{i} = class(values{i});  % 显示类型名
-                                end
-                            end
-                        end
-                        
-                        excelData = [headers', values'];
-                    end
-                end
+                excelData = parseExcelAsTable(app, excelFilePath);
             catch ME
-                % 读取失败，返回空
                 warning(['读取Excel文件失败: ', ME.message]);
+                excelData = {};
             end
         end
-        
+
+        function excelFilePath = locateExcelInFolder(targetFolder)
+            % 在指定文件夹中查找Excel文件（优先.xlsx，再.xls）
+            excelFilePath = '';
+
+            if ~isfolder(targetFolder)
+                return;
+            end
+
+            excelFiles = dir(fullfile(targetFolder, '*.xlsx'));
+            if isempty(excelFiles)
+                excelFiles = dir(fullfile(targetFolder, '*.xls'));
+            end
+
+            if ~isempty(excelFiles)
+                excelFilePath = fullfile(targetFolder, excelFiles(1).name);
+            end
+        end
+
+        function excelData = parseExcelAsTable(app, excelFilePath)
+            % 将Excel文件解析为表格数据
+            excelData = {};
+
+            raw = readcell(excelFilePath);
+
+            % Excel格式：第1行从B1开始是字段，第2行从B2开始是值
+            if size(raw, 1) < 2 || size(raw, 2) < 2
+                return;
+            end
+
+            headers = raw(1, 2:end);
+            values = raw(2, 2:end);
+
+            % 过滤掉空字段
+            validIdx = ~cellfun(@(x) isempty(x) || ...
+                (ischar(x) && isempty(strtrim(x))) || ...
+                (isnumeric(x) && isnan(x)), headers);
+
+            if ~any(validIdx)
+                return;
+            end
+
+            headers = headers(validIdx);
+            values = values(validIdx);
+
+            % 确保 headers 也是字符串
+            for i = 1:length(headers)
+                if ~ischar(headers{i}) && ~isstring(headers{i})
+                    if isnumeric(headers{i})
+                        headers{i} = num2str(headers{i});
+                    elseif isdatetime(headers{i})
+                        headers{i} = char(headers{i});
+                    else
+                        try
+                            headers{i} = char(string(headers{i}));
+                        catch
+                            headers{i} = sprintf('字段%d', i);
+                        end
+                    end
+                end
+            end
+
+            % 将所有值转换为字符串（处理各种数据类型）
+            for i = 1:length(values)
+                if isempty(values{i})
+                    values{i} = '';
+                elseif isnumeric(values{i})
+                    if isnan(values{i})
+                        values{i} = '';
+                    else
+                        values{i} = num2str(values{i});
+                    end
+                elseif isdatetime(values{i})
+                    values{i} = char(values{i});
+                elseif isduration(values{i})
+                    values{i} = char(values{i});
+                elseif islogical(values{i})
+                    values{i} = char(string(values{i}));
+                elseif iscell(values{i})
+                    values{i} = '{cell}';
+                elseif isstruct(values{i})
+                    values{i} = '{struct}';
+                elseif ~ischar(values{i}) && ~isstring(values{i})
+                    try
+                        values{i} = char(string(values{i}));
+                    catch
+                        values{i} = class(values{i});
+                    end
+                end
+            end
+
+            excelData = [headers', values'];
+        end
+
         function updateBgInfoFromExcel(app, folderPath)
             % 更新试验背景信息（从当前目录的Excel文件读取）
-            excelData = readExcelFile(app, folderPath);
-            
+            excelData = readExcelFile(app, folderPath, false);
+
             if ~isempty(excelData)
                 app.ExcelTable.Data = excelData;
             else
                 app.ExcelTable.Data = {};
             end
         end
-
         function updateSubdirDisplay(app, folderPath)
             % 更新子目录显示（显示当前目录的下级目录）
             app.SubdirListBox.Items = {};
@@ -6951,6 +6983,9 @@ classdef MatViewerTool < matlab.apps.AppBase
             pathParts = strsplit(relativePath, filesep);
             pathParts = pathParts(~cellfun(@isempty, pathParts));
 
+            % 检测领域，用于默认字段替换
+            domainId = detectDomainFromPath(app, currentPath);
+
             % 如果没有路径部分，说明currentPath就是根目录
             if isempty(pathParts)
                 level1Path = currentPath;
@@ -6971,8 +7006,13 @@ classdef MatViewerTool < matlab.apps.AppBase
                 excelPath = fullfile(level1Path, excelFiles(1).name);
             end
 
-            % 如果没有找到Excel文件，返回空（将使用默认字段名）
+            % 如果没有找到Excel文件，使用领域默认字段
             if isempty(excelPath)
+                domainDefaults = getDomainDefaultFieldNames(app, domainId);
+                if ~isempty(domainDefaults)
+                    fieldNames = domainDefaults;
+                    fieldUnits = repmat({''}, 1, numel(domainDefaults));
+                end
                 return;
             end
 
@@ -6984,6 +7024,11 @@ classdef MatViewerTool < matlab.apps.AppBase
                 if size(raw, 1) < 1
                     warning('MatViewerTool:InsufficientRows', ...
                         'Excel文件行数不足（需要至少1行）: %s', excelPath);
+                    domainDefaults = getDomainDefaultFieldNames(app, domainId);
+                    if ~isempty(domainDefaults)
+                        fieldNames = domainDefaults;
+                        fieldUnits = repmat({''}, 1, numel(domainDefaults));
+                    end
                     return;
                 end
 
@@ -7035,13 +7080,131 @@ classdef MatViewerTool < matlab.apps.AppBase
                     end
                 end
 
+                % 如果Excel字段名为空，回退到领域默认字段
+                domainDefaults = getDomainDefaultFieldNames(app, domainId);
+                if isempty(fieldNames) && ~isempty(domainDefaults)
+                    fieldNames = domainDefaults;
+                    fieldUnits = repmat({''}, 1, numel(domainDefaults));
+                elseif ~isempty(domainDefaults)
+                    for idx = 1:min(length(fieldNames), length(domainDefaults))
+                        if isGenericFieldName(app, fieldNames{idx}, idx)
+                            fieldNames{idx} = domainDefaults{idx};
+                        end
+                    end
+                end
+
             catch ME
                 warning('MatViewerTool:ReadExcelError', ...
                     '读取Excel文件失败: %s\n文件路径: %s', ...
                     ME.message, excelPath);
+                domainDefaults = getDomainDefaultFieldNames(app, domainId);
+                if ~isempty(domainDefaults)
+                    fieldNames = domainDefaults;
+                    fieldUnits = repmat({''}, 1, numel(domainDefaults));
+                end
             end
         end
 
+        function domainId = detectDomainFromPath(app, currentPath)
+            % 基于第一级目录名称推断所属领域（1-4），未匹配返回0
+            domainId = 0;
+
+            if isempty(app.CurrentDataPath) || isempty(currentPath)
+                return;
+            end
+
+            currentPath = strrep(currentPath, '/', filesep);
+            currentPath = strrep(currentPath, '\', filesep);
+            rootPath = strrep(app.CurrentDataPath, '/', filesep);
+            rootPath = strrep(rootPath, '\', filesep);
+
+            if ~endsWith(rootPath, filesep)
+                rootPath = [rootPath, filesep];
+            end
+
+            if ~startsWith(currentPath, rootPath)
+                return;
+            end
+
+            relativePath = strrep(currentPath, rootPath, '');
+            pathParts = strsplit(relativePath, filesep);
+            pathParts = pathParts(~cellfun(@isempty, pathParts));
+            if isempty(pathParts)
+                return;
+            end
+
+            level1Name = lower(char(string(pathParts{1})));
+
+            patterns = {
+                1, {'领域1', '领域一', 'domain1', 'domain 1'};
+                2, {'领域2', '领域二', 'domain2', 'domain 2'};
+                3, {'领域3', '领域三', 'domain3', 'domain 3'};
+                4, {'领域4', '领域四', 'domain4', 'domain 4'}
+            };
+
+            for i = 1:size(patterns, 1)
+                domainNum = patterns{i, 1};
+                keywords = patterns{i, 2};
+                for j = 1:length(keywords)
+                    if contains(level1Name, lower(keywords{j}))
+                        domainId = domainNum;
+                        return;
+                    end
+                end
+            end
+        end
+
+        function names = getDomainDefaultFieldNames(app, domainId)
+            %#ok<INUSD> 保留app参数以便未来扩展
+            switch domainId
+                case 1
+                    names = {'领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5'};
+                case 2
+                    names = {'领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5'};
+                case 3
+                    names = {'领域3.1', '领域3.2', '领域3.3', '领域3.4', '领域3.5'};
+                case 4
+                    names = {'领域4.1', '领域4.2', '领域4.3', '领域4.4', '领域4.5'};
+                otherwise
+                    names = {};
+            end
+        end
+
+        function tf = isGenericFieldName(app, fieldName, index)
+            %#ok<INUSD>
+            tf = false;
+            if isempty(fieldName)
+                return;
+            end
+
+            nameStr = lower(strtrim(char(string(fieldName))));
+            numericIdx = num2str(index);
+            paddedIdx = sprintf('%02d', index);
+            chineseDigits = {'一','二','三','四','五','六','七','八','九','十'};
+            chineseIdx = '';
+            if index <= numel(chineseDigits)
+                chineseIdx = chineseDigits{index};
+            end
+
+            candidates = {
+                ['字段', numericIdx], ...
+                ['字段', paddedIdx], ...
+                ['字段', chineseIdx], ...
+                ['字段', sprintf('%d', index - 1)], ...
+                ['字段', sprintf('%02d', index - 1)]
+            };
+
+            for i = 1:length(candidates)
+                candidate = lower(strtrim(candidates{i}));
+                if isempty(candidate)
+                    continue;
+                end
+                if strcmp(nameStr, candidate)
+                    tf = true;
+                    return;
+                end
+            end
+        end
         function executePrepOnCurrentFrame(app, prepIndex)
             % 对当前帧执行预处理并显示
             % prepIndex: 1, 2, 3, 或 -1表示使用最新的预处理
