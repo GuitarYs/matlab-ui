@@ -83,8 +83,11 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         % 域Excel字段
         DomainFieldList         cell
-        FieldDisplayNames       cell        % 从第一级目录Excel读取的字段显示名称
+        FieldDisplayNames       cell        % 根据领域Excel配置的字段显示名称
         FieldUnits              cell        % 从字段名中提取的单位（如"(m)"）
+
+        % 领域字段映射
+        DomainFieldMappings     struct
 
         % 预处理相关
         PreprocessingList       cell        % 预处理配置列表
@@ -133,6 +136,13 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.DomainFieldList = {};
             app.FieldDisplayNames = {};
             app.FieldUnits = {};
+
+            % 领域字段名称配置
+            app.DomainFieldMappings = struct(...
+                '领域1', {{'领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5'}}, ...
+                '领域2', {{'领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5'}}, ...
+                '领域3', {{'领域3.1', '领域3.2', '领域3.3', '领域3.4', '领域3.5'}}, ...
+                '领域4', {{'领域4.1', '领域4.2', '领域4.3', '领域4.4', '领域4.5'}});
 
             app.PreprocessingList = {};
             app.PreprocessingResults = {};
@@ -1079,12 +1089,7 @@ classdef MatViewerTool < matlab.apps.AppBase
 
                 % 放开目录层级限制：对所有层级都尝试读取Excel和子目录信息
                 % 原来只对3级和4级目录读取，现在对所有层级都读取
-                updateBgInfoFromExcel(app, selectedPath);
                 updateSubdirDisplay(app, selectedPath);
-
-                % 读取对应第一级目录的Excel字段名和单位（用于帧信息显示区）
-                % 如果没有Excel文件，readFieldNamesFromLevel1Excel会返回空数组，会使用默认字段名（字段1、字段2等）
-                [app.FieldDisplayNames, app.FieldUnits] = readFieldNamesFromLevel1Excel(app, selectedPath);
 
                 % 将GUI窗口置顶
                 figure(app.UIFigure);
@@ -1108,6 +1113,8 @@ classdef MatViewerTool < matlab.apps.AppBase
             % 读取试验背景信息Excel文件（只从3级或4级目录读取）
             % 优先读取4级目录的Excel，如果4级没有则读取3级的Excel
             excelData = {};
+            app.FieldDisplayNames = {};
+            app.FieldUnits = {};
 
             if ~isfolder(folderPath)
                 return;
@@ -1129,9 +1136,6 @@ classdef MatViewerTool < matlab.apps.AppBase
             % 如果是4级目录，优先在4级查找Excel
             if currentLevel == 4
                 excelFiles = dir(fullfile(folderPath, '*.xlsx'));
-                if isempty(excelFiles)
-                    excelFiles = dir(fullfile(folderPath, '*.xls'));
-                end
 
                 if ~isempty(excelFiles)
                     % 4级目录找到Excel
@@ -1140,9 +1144,6 @@ classdef MatViewerTool < matlab.apps.AppBase
                     % 4级没有，向上找3级目录的Excel
                     parentPath = fileparts(folderPath);
                     parentExcelFiles = dir(fullfile(parentPath, '*.xlsx'));
-                    if isempty(parentExcelFiles)
-                        parentExcelFiles = dir(fullfile(parentPath, '*.xls'));
-                    end
 
                     if ~isempty(parentExcelFiles)
                         excelFilePath = fullfile(parentPath, parentExcelFiles(1).name);
@@ -1151,39 +1152,62 @@ classdef MatViewerTool < matlab.apps.AppBase
             elseif currentLevel == 3
                 % 如果是3级目录，直接在3级查找Excel
                 excelFiles = dir(fullfile(folderPath, '*.xlsx'));
-                if isempty(excelFiles)
-                    excelFiles = dir(fullfile(folderPath, '*.xls'));
-                end
 
                 if ~isempty(excelFiles)
                     excelFilePath = fullfile(folderPath, excelFiles(1).name);
                 end
             end
-            
+
+            % 未找到Excel，提示自定义导入
             if isempty(excelFilePath)
-                return;
+                userChoice = uiconfirm(app.UIFigure, ...
+                    '未找到Excel文件，是否自定义导入？', ...
+                    '未找到Excel', ...
+                    'Options', {'自定义导入Excel', '取消'}, ...
+                    'DefaultOption', 2, ...
+                    'CancelOption', 2);
+
+                if strcmp(userChoice, '自定义导入Excel')
+                    [fileName, filePath] = uigetfile({'*.xlsx', 'Excel 文件 (*.xlsx)'}, ...
+                        '选择Excel文件');
+
+                    % 文件选择后置顶UI（无论是否取消）
+                    figure(app.UIFigure);
+
+                    if ~isequal(fileName, 0)
+                        excelFilePath = fullfile(filePath, fileName);
+                    else
+                        return;
+                    end
+                else
+                    return;
+                end
             end
-            
+
             try
                 % 读取Excel文件 (使用 readcell 替代 xlsread)
                 raw = readcell(excelFilePath);
-                
+
+                % 解析领域字段映射
+                app.FieldDisplayNames = parseDomainFieldNames(app, raw);
+                app.FieldUnits = {};
+
                 % Excel格式：第1行从B1开始是字段，第2行从B2开始是值
                 if size(raw, 1) >= 2 && size(raw, 2) >= 2
                     % 从第2列（B列）开始读取
                     headers = raw(1, 2:end);
                     values = raw(2, 2:end);
-                    
+
                     % 过滤掉空字段
                     validIdx = ~cellfun(@(x) isempty(x) || ...
                         (ischar(x) && isempty(strtrim(x))) || ...
                         (isnumeric(x) && isnan(x)), headers);
-                    
+
                     if any(validIdx)
                         % 转换为字符串
                         headers = headers(validIdx);
                         values = values(validIdx);
-                        
+
                         % 确保 headers 也是字符串
                         for i = 1:length(headers)
                             if ~ischar(headers{i}) && ~isstring(headers{i})
@@ -1200,7 +1224,7 @@ classdef MatViewerTool < matlab.apps.AppBase
                                 end
                             end
                         end
-                        
+
                         % 将所有值转换为字符串（处理各种数据类型）
                         for i = 1:length(values)
                             if isempty(values{i})
@@ -1235,13 +1259,65 @@ classdef MatViewerTool < matlab.apps.AppBase
                                 end
                             end
                         end
-                        
+
                         excelData = [headers', values'];
                     end
                 end
             catch ME
                 % 读取失败，返回空
                 warning(['读取Excel文件失败: ', ME.message]);
+            end
+        end
+
+        function fieldNames = parseDomainFieldNames(app, raw)
+            % 根据Excel中的领域标记解析帧信息显示字段名称
+            fieldNames = {};
+
+            if isempty(raw) || size(raw, 2) < 2
+                return;
+            end
+
+            % 在Excel内容中搜索领域标记
+            domainKey = '';
+            domainCandidates = {'领域1', '领域2', '领域3', '领域4'};
+
+            for idx = 1:numel(raw)
+                cellValue = raw{idx};
+                if isstring(cellValue) || ischar(cellValue)
+                    valueStr = char(cellValue);
+                    for c = 1:length(domainCandidates)
+                        if contains(valueStr, domainCandidates{c})
+                            domainKey = domainCandidates{c};
+                            break;
+                        end
+                    end
+
+                    if ~isempty(domainKey)
+                        break;
+                    end
+                end
+            end
+
+            if ~isempty(domainKey) && isfield(app.DomainFieldMappings, domainKey)
+                fieldNames = app.DomainFieldMappings.(domainKey);
+                return;
+            end
+
+            % 如果未识别到领域标记，则尝试使用Excel中的字段值作为显示名称
+            if size(raw, 1) >= 2
+                valuesRow = raw(2, 2:end);
+            else
+                valuesRow = raw(1, 2:end);
+            end
+
+            for i = 1:length(valuesRow)
+                cellValue = valuesRow{i};
+                if isstring(cellValue) || ischar(cellValue)
+                    cleanStr = strtrim(char(cellValue));
+                    if ~isempty(cleanStr)
+                        fieldNames{end+1} = cleanStr; %#ok<AGROW>
+                    end
+                end
             end
         end
         
@@ -1402,9 +1478,6 @@ classdef MatViewerTool < matlab.apps.AppBase
                 app.FieldTable.Data = {};
                 app.FieldTable.ColumnName = {'字段', '值', '类型'};
             end
-
-            % 读取第一级目录Excel中的字段显示名称和单位
-            [app.FieldDisplayNames, app.FieldUnits] = readFieldNamesFromLevel1Excel(app, selectedPath);
 
             % 创建进度对话框
             progressMessage = '正在加载MAT文件...';
