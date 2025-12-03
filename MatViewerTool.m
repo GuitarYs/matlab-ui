@@ -1089,7 +1089,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function updateExcelInfo(app, folderPath)
             % 更新Excel信息显示
-            excelData = readExcelFile(app, folderPath, true);
+            excelData = readExcelFile(app, folderPath, false);
 
             if ~isempty(excelData)
                 app.ExcelTable.Data = excelData;
@@ -1106,6 +1106,11 @@ classdef MatViewerTool < matlab.apps.AppBase
             end
 
             excelData = {};
+
+            % 每次读取前重置字段显示名称和单位为默认值
+            [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(app);
+            app.FieldDisplayNames = defaultNames;
+            app.FieldUnits = defaultUnits;
 
             if ~isfolder(folderPath)
                 return;
@@ -1167,31 +1172,31 @@ classdef MatViewerTool < matlab.apps.AppBase
                     return;
                 end
             end
-            
+
             if isempty(excelFilePath)
                 return;
             end
-            
+
             try
                 % 读取Excel文件 (使用 readcell 替代 xlsread)
                 raw = readcell(excelFilePath);
-                
+
                 % Excel格式：第1行从B1开始是字段，第2行从B2开始是值
                 if size(raw, 1) >= 2 && size(raw, 2) >= 2
                     % 从第2列（B列）开始读取
                     headers = raw(1, 2:end);
                     values = raw(2, 2:end);
-                    
+
                     % 过滤掉空字段
                     validIdx = ~cellfun(@(x) isempty(x) || ...
                         (ischar(x) && isempty(strtrim(x))) || ...
                         (isnumeric(x) && isnan(x)), headers);
-                    
+
                     if any(validIdx)
                         % 转换为字符串
                         headers = headers(validIdx);
                         values = values(validIdx);
-                        
+
                         % 确保 headers 也是字符串
                         for i = 1:length(headers)
                             if ~ischar(headers{i}) && ~isstring(headers{i})
@@ -1208,7 +1213,7 @@ classdef MatViewerTool < matlab.apps.AppBase
                                 end
                             end
                         end
-                        
+
                         % 将所有值转换为字符串（处理各种数据类型）
                         for i = 1:length(values)
                             if isempty(values{i})
@@ -1243,8 +1248,11 @@ classdef MatViewerTool < matlab.apps.AppBase
                                 end
                             end
                         end
-                        
-                        excelData = [headers', values'];
+
+                        excelData = [headers'', values''];
+
+                        % 根据Excel中的领域名称更新帧信息显示名称
+                        updateFieldDisplayNamesFromHeaders(app, headers);
                     end
                 end
             catch ME
@@ -1252,7 +1260,57 @@ classdef MatViewerTool < matlab.apps.AppBase
                 warning(['读取Excel文件失败: ', ME.message]);
             end
         end
-        
+
+        function updateFieldDisplayNamesFromHeaders(app, headers)
+            % 根据Excel字段名称中的领域信息更新帧信息显示名称
+            [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(app);
+
+            displayNames = defaultNames;
+            units = defaultUnits;
+            domainCounters = ones(1, 4);  % 分别用于领域1-4
+
+            for i = 1:numel(headers)
+                headerStr = headers{i};
+                if ~ischar(headerStr) && ~isstring(headerStr)
+                    try
+                        headerStr = char(string(headerStr));
+                    catch
+                        headerStr = '';
+                    end
+                end
+
+                headerStr = strtrim(char(headerStr));
+                displayName = sprintf('字段%d', i);
+
+                if startsWith(headerStr, '领域1')
+                    displayName = sprintf('领域1.%d', domainCounters(1));
+                    domainCounters(1) = domainCounters(1) + 1;
+                elseif startsWith(headerStr, '领域2')
+                    displayName = sprintf('领域2.%d', domainCounters(2));
+                    domainCounters(2) = domainCounters(2) + 1;
+                elseif startsWith(headerStr, '领域3')
+                    displayName = sprintf('领域3.%d', domainCounters(3));
+                    domainCounters(3) = domainCounters(3) + 1;
+                elseif startsWith(headerStr, '领域4')
+                    displayName = sprintf('领域4.%d', domainCounters(4));
+                    domainCounters(4) = domainCounters(4) + 1;
+                end
+
+                if i <= numel(displayNames)
+                    displayNames{i} = displayName;
+                else
+                    displayNames{end+1} = displayName; %#ok<AGROW>
+                end
+
+                if i > numel(units)
+                    units{end+1} = '';
+                end
+            end
+
+            app.FieldDisplayNames = displayNames;
+            app.FieldUnits = units;
+        end
+
         function updateBgInfoFromExcel(app, folderPath)
             % 更新试验背景信息（从当前目录的Excel文件读取）
             excelData = readExcelFile(app, folderPath);
@@ -1375,7 +1433,15 @@ classdef MatViewerTool < matlab.apps.AppBase
             if ~iscell(selectedFiles)
                 selectedFiles = {selectedFiles};
             end
-            
+
+            % 尝试从所选目录或其上一级读取试验背景信息
+            excelData = readExcelFile(app, selectedPath, true);
+            if ~isempty(excelData)
+                app.ExcelTable.Data = excelData;
+            else
+                app.ExcelTable.Data = {};
+            end
+
             % 清空现有数据
             app.MatFiles = {};
             app.MatData = {};
@@ -7049,12 +7115,8 @@ classdef MatViewerTool < matlab.apps.AppBase
 
         function [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(~)
             % 返回帧信息显示区的默认字段名称和单位
-            defaultNames = {
-                '领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5', ...
-                '领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5', ...
-                '领域3.1', '领域3.2', '领域3.3', '领域3.4', '领域3.5', ...
-                '领域4.1', '领域4.2', '领域4.3', '领域4.4', '领域4.5' ...
-            };
+            numDefaults = 20;
+            defaultNames = arrayfun(@(i) sprintf('字段%d', i), 1:numDefaults, 'UniformOutput', false);
 
             defaultUnits = repmat({''}, 1, numel(defaultNames));
         end
