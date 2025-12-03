@@ -131,8 +131,7 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.AutoPlayInterval = 5;  % 5秒
             app.IsImageDataset = false;
             app.DomainFieldList = {};
-            app.FieldDisplayNames = {};
-            app.FieldUnits = {};
+            [app.FieldDisplayNames, app.FieldUnits] = getDefaultFieldDisplayNames(app);
 
             app.PreprocessingList = {};
             app.PreprocessingResults = {};
@@ -146,6 +145,150 @@ classdef MatViewerTool < matlab.apps.AppBase
             
             if nargout == 0
                 clear app
+            end
+        end
+
+        function [excelData, headers] = parseExcelLayout(raw)
+            % 根据原始readcell结果解析背景信息，兼容横排/竖排两种格式
+            excelData = {};
+            headers = {};
+
+            [rowCount, colCount] = size(raw);
+
+            % ------- 竖排（首列字段、第二列值）方案 -------
+            verticalCount = 0;
+            verticalHeaders = {};
+            verticalValues = {};
+            if colCount >= 2
+                fieldCol = raw(:, 1);
+                valueCol = raw(:, 2);
+
+                % 跳过表头（字段/值）行
+                startRow = 1;
+                if rowCount >= 1 && isHeaderLabel(fieldCol{1}) && isHeaderLabel(valueCol{1})
+                    startRow = 2;
+                end
+
+                for r = startRow:rowCount
+                    fieldCell = fieldCol{r};
+                    valueCell = valueCol{r};
+                    if isEmptyCell(fieldCell)
+                        continue;
+                    end
+
+                    verticalHeaders{end+1} = fieldCell; %#ok<AGROW>
+                    verticalValues{end+1} = valueCell; %#ok<AGROW>
+                end
+
+                verticalCount = numel(verticalHeaders);
+            end
+
+            % ------- 横排（第一行字段、第二行对应值）方案 -------
+            horizontalCount = 0;
+            horizontalHeaders = {};
+            horizontalValues = {};
+            if rowCount >= 2
+                candidateHeaders = raw(1, 2:end);
+                candidateValues = raw(2, 2:end);
+
+                validIdx = ~cellfun(@isEmptyCell, candidateHeaders);
+                horizontalHeaders = candidateHeaders(validIdx);
+                horizontalValues = candidateValues(validIdx);
+                horizontalCount = numel(horizontalHeaders);
+            end
+
+            % 优先采用条目更多的布局；数量相同时优先竖排（符合原先视觉布局）
+            useVertical = verticalCount >= horizontalCount && verticalCount > 0;
+
+            if useVertical
+                excelData = [verticalHeaders', verticalValues'];
+                headers = verticalHeaders;
+            elseif horizontalCount > 0
+                excelData = [horizontalHeaders', horizontalValues'];
+                headers = horizontalHeaders;
+            end
+        end
+
+        function isHeader = isHeaderLabel(cellValue)
+            % 判断单元格是否为表头“字段/值”
+            isHeader = false;
+            if ischar(cellValue) || isstring(cellValue)
+                label = strtrim(char(cellValue));
+                isHeader = any(strcmp(label, {'字段', '值', 'Field', 'Value'}));
+            end
+        end
+
+        function emptyFlag = isEmptyCell(cellValue)
+            % 判断单元格是否为空
+            emptyFlag = isempty(cellValue) || ...
+                (ischar(cellValue) && isempty(strtrim(cellValue))) || ...
+                (isstring(cellValue) && strlength(strtrim(cellValue)) == 0) || ...
+                (isnumeric(cellValue) && isnan(cellValue));
+        end
+
+        function excelDataOut = convertExcelValuesToStrings(excelDataIn)
+            % 将二维cell的字段/值统一转换为字符串表示
+            excelDataOut = excelDataIn;
+
+            for i = 1:size(excelDataIn, 1)
+                % 处理字段名
+                headerVal = excelDataIn{i, 1};
+                excelDataOut{i, 1} = normalizeToString(headerVal, i);
+
+                % 处理对应的值
+                valueVal = excelDataIn{i, 2};
+                excelDataOut{i, 2} = normalizeValueToString(valueVal);
+            end
+        end
+
+        function outStr = normalizeToString(val, idx)
+            % 将任意单元格值转换为字符串，供字段名使用
+            if ischar(val) || isstring(val)
+                outStr = strtrim(char(val));
+                if isempty(outStr)
+                    outStr = sprintf('字段%d', idx);
+                end
+            elseif isnumeric(val)
+                outStr = num2str(val);
+            elseif isdatetime(val) || isduration(val)
+                outStr = char(val);
+            elseif islogical(val)
+                outStr = char(string(val));
+            else
+                try
+                    outStr = char(string(val));
+                catch
+                    outStr = sprintf('字段%d', idx);
+                end
+            end
+        end
+
+        function outStr = normalizeValueToString(val)
+            % 将值统一转换为字符串
+            if isempty(val)
+                outStr = '';
+            elseif isnumeric(val)
+                if isnan(val)
+                    outStr = '';
+                else
+                    outStr = num2str(val);
+                end
+            elseif isdatetime(val) || isduration(val)
+                outStr = char(val);
+            elseif islogical(val)
+                outStr = char(string(val));
+            elseif iscell(val)
+                outStr = '{cell}';
+            elseif isstruct(val)
+                outStr = '{struct}';
+            elseif ischar(val) || isstring(val)
+                outStr = char(val);
+            else
+                try
+                    outStr = char(string(val));
+                catch
+                    outStr = class(val);
+                end
             end
         end
         
@@ -273,7 +416,9 @@ classdef MatViewerTool < matlab.apps.AppBase
             % Excel表格
             app.ExcelTable = uitable(excelLayout);
             app.ExcelTable.ColumnName = {'字段', '值'};
-            app.ExcelTable.ColumnWidth = {'1x', '2x'};
+            % 保持左侧字段列较窄、右侧值列较宽，匹配原有布局
+            % 保持“字段”列较窄、“值”列较宽的原始布局
+            app.ExcelTable.ColumnWidth = {70, '1x'};
             app.ExcelTable.RowName = {};
             app.ExcelTable.CellSelectionCallback = @(src,event) onExcelDoubleClick(app, event);
             app.ExcelTable.Layout.Row = 2;
@@ -1079,12 +1224,7 @@ classdef MatViewerTool < matlab.apps.AppBase
 
                 % 放开目录层级限制：对所有层级都尝试读取Excel和子目录信息
                 % 原来只对3级和4级目录读取，现在对所有层级都读取
-                updateBgInfoFromExcel(app, selectedPath);
                 updateSubdirDisplay(app, selectedPath);
-
-                % 读取对应第一级目录的Excel字段名和单位（用于帧信息显示区）
-                % 如果没有Excel文件，readFieldNamesFromLevel1Excel会返回空数组，会使用默认字段名（字段1、字段2等）
-                [app.FieldDisplayNames, app.FieldUnits] = readFieldNamesFromLevel1Excel(app, selectedPath);
 
                 % 将GUI窗口置顶
                 figure(app.UIFigure);
@@ -1095,148 +1235,117 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function updateExcelInfo(app, folderPath)
             % 更新Excel信息显示
-            excelData = readExcelFile(app, folderPath);
-            
+            excelData = readExcelFile(app, folderPath, false);
+
             if ~isempty(excelData)
                 app.ExcelTable.Data = excelData;
             else
                 app.ExcelTable.Data = {};
             end
         end
-        
-        function excelData = readExcelFile(app, folderPath)
-            % 读取试验背景信息Excel文件（只从3级或4级目录读取）
-            % 优先读取4级目录的Excel，如果4级没有则读取3级的Excel
+
+        function excelData = readExcelFile(app, folderPath, allowManualImport)
+            % 读取试验背景信息Excel文件（优先当前目录，其次上级目录）
+            % allowManualImport: 当自动查找失败时，是否允许弹窗选择Excel
+            if nargin < 3
+                allowManualImport = false;
+            end
+
             excelData = {};
+
+            % 每次读取前重置字段显示名称和单位为默认值
+            [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(app);
+            app.FieldDisplayNames = defaultNames;
+            app.FieldUnits = defaultUnits;
 
             if ~isfolder(folderPath)
                 return;
             end
 
-            % 计算当前目录层级
-            relativePath = strrep(folderPath, app.CurrentDataPath, '');
-            pathParts = strsplit(relativePath, filesep);
-            pathParts = pathParts(~cellfun(@isempty, pathParts));
-            currentLevel = length(pathParts);
+            searchPaths = {folderPath};
 
-            % 只从3级或4级目录读取背景信息
-            if currentLevel ~= 3 && currentLevel ~= 4
-                return;
+            % 在上一级目录兜底查找
+            parentPath = fileparts(folderPath);
+            if ~strcmp(parentPath, folderPath) && isfolder(parentPath)
+                searchPaths{end+1} = parentPath; %#ok<AGROW>
             end
 
             excelFilePath = '';
 
-            % 如果是4级目录，优先在4级查找Excel
-            if currentLevel == 4
-                excelFiles = dir(fullfile(folderPath, '*.xlsx'));
+            % 依次在当前目录及上一级目录查找Excel
+            for pathIdx = 1:numel(searchPaths)
+                currentSearchPath = searchPaths{pathIdx};
+                excelFiles = dir(fullfile(currentSearchPath, '*.xlsx'));
                 if isempty(excelFiles)
-                    excelFiles = dir(fullfile(folderPath, '*.xls'));
+                    excelFiles = dir(fullfile(currentSearchPath, '*.xls'));
                 end
 
                 if ~isempty(excelFiles)
-                    % 4级目录找到Excel
-                    excelFilePath = fullfile(folderPath, excelFiles(1).name);
-                else
-                    % 4级没有，向上找3级目录的Excel
-                    parentPath = fileparts(folderPath);
-                    parentExcelFiles = dir(fullfile(parentPath, '*.xlsx'));
-                    if isempty(parentExcelFiles)
-                        parentExcelFiles = dir(fullfile(parentPath, '*.xls'));
-                    end
-
-                    if ~isempty(parentExcelFiles)
-                        excelFilePath = fullfile(parentPath, parentExcelFiles(1).name);
-                    end
-                end
-            elseif currentLevel == 3
-                % 如果是3级目录，直接在3级查找Excel
-                excelFiles = dir(fullfile(folderPath, '*.xlsx'));
-                if isempty(excelFiles)
-                    excelFiles = dir(fullfile(folderPath, '*.xls'));
-                end
-
-                if ~isempty(excelFiles)
-                    excelFilePath = fullfile(folderPath, excelFiles(1).name);
+                    excelFilePath = fullfile(currentSearchPath, excelFiles(1).name);
+                    break;
                 end
             end
-            
+
+            % 未找到时允许用户手动导入
+            if isempty(excelFilePath)
+                if ~allowManualImport
+                    return;
+                end
+
+                userChoice = '';
+                try
+                    userChoice = uiconfirm(app.UIFigure, ...
+                        ['未在所选目录或上一级目录找到Excel文件。', newline, ...
+                        '是否手动选择试验背景信息Excel？'], ...
+                        '未找到Excel', ...
+                        'Options', {'自定义导入Excel'}, ...
+                        'DefaultOption', '自定义导入Excel');
+                catch ME
+                    % 用户通过右上角关闭对话框
+                    if strcmp(ME.identifier, 'MATLAB:uiconfirm:OperationCancelled')
+                        return;
+                    end
+                    rethrow(ME);
+                end
+
+                figure(app.UIFigure);
+
+                if strcmp(userChoice, '自定义导入Excel')
+                    [fileName, filePath] = uigetfile({ ...
+                        '*.xlsx', 'Excel 文件 (*.xlsx)'}, ...
+                        '选择试验背景信息Excel', folderPath);
+
+                    figure(app.UIFigure);
+
+                    if isequal(fileName, 0)
+                        return;
+                    end
+
+                    excelFilePath = fullfile(filePath, fileName);
+                else
+                    return;
+                end
+            end
+
             if isempty(excelFilePath)
                 return;
             end
-            
+
             try
                 % 读取Excel文件 (使用 readcell 替代 xlsread)
                 raw = readcell(excelFilePath);
-                
-                % Excel格式：第1行从B1开始是字段，第2行从B2开始是值
-                if size(raw, 1) >= 2 && size(raw, 2) >= 2
-                    % 从第2列（B列）开始读取
-                    headers = raw(1, 2:end);
-                    values = raw(2, 2:end);
-                    
-                    % 过滤掉空字段
-                    validIdx = ~cellfun(@(x) isempty(x) || ...
-                        (ischar(x) && isempty(strtrim(x))) || ...
-                        (isnumeric(x) && isnan(x)), headers);
-                    
-                    if any(validIdx)
-                        % 转换为字符串
-                        headers = headers(validIdx);
-                        values = values(validIdx);
-                        
-                        % 确保 headers 也是字符串
-                        for i = 1:length(headers)
-                            if ~ischar(headers{i}) && ~isstring(headers{i})
-                                if isnumeric(headers{i})
-                                    headers{i} = num2str(headers{i});
-                                elseif isdatetime(headers{i})
-                                    headers{i} = char(headers{i});
-                                else
-                                    try
-                                        headers{i} = char(string(headers{i}));
-                                    catch
-                                        headers{i} = sprintf('字段%d', i);
-                                    end
-                                end
-                            end
-                        end
-                        
-                        % 将所有值转换为字符串（处理各种数据类型）
-                        for i = 1:length(values)
-                            if isempty(values{i})
-                                values{i} = '';
-                            elseif isnumeric(values{i})
-                                if isnan(values{i})
-                                    values{i} = '';
-                                else
-                                    values{i} = num2str(values{i});
-                                end
-                            elseif isdatetime(values{i})
-                                % datetime 类型转换为字符串
-                                values{i} = char(values{i});
-                            elseif isduration(values{i})
-                                % duration 类型转换为字符串
-                                values{i} = char(values{i});
-                            elseif islogical(values{i})
-                                % logical 类型转换为字符串
-                                values{i} = char(string(values{i}));
-                            elseif iscell(values{i})
-                                % 嵌套的 cell，尝试转换
-                                values{i} = '{cell}';
-                            elseif isstruct(values{i})
-                                % struct 类型
-                                values{i} = '{struct}';
-                            elseif ~ischar(values{i}) && ~isstring(values{i})
-                                % 其他未知类型，尝试转换为字符串
-                                try
-                                    values{i} = char(string(values{i}));
-                                catch
-                                    values{i} = class(values{i});  % 显示类型名
-                                end
-                            end
-                        end
-                        
-                        excelData = [headers', values'];
+
+                % 支持两种布局：
+                % 1) A列为“字段”、B列为“值”，数据按行垂直排列
+                % 2) 第1行自B列起是字段，第2行自B列起是值（原横排格式）
+                if ~isempty(raw) && size(raw, 2) >= 2
+                    [excelData, headersForDomain] = parseExcelLayout(raw);
+
+                    if ~isempty(excelData)
+                        excelData = convertExcelValuesToStrings(excelData);
+
+                        % 根据Excel中的领域名称更新帧信息显示名称
+                        updateFieldDisplayNamesFromHeaders(app, headersForDomain);
                     end
                 end
             catch ME
@@ -1244,7 +1353,74 @@ classdef MatViewerTool < matlab.apps.AppBase
                 warning(['读取Excel文件失败: ', ME.message]);
             end
         end
-        
+
+        function updateFieldDisplayNamesFromHeaders(app, headers)
+            % 根据Excel字段名称中的领域信息更新帧信息显示名称
+            [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(app);
+            domainNameTemplates = getDomainNameTemplates(app);
+
+            displayNames = defaultNames;
+            units = defaultUnits;
+            domainCounters = ones(1, 4);  % 分别用于领域1-4
+
+            for i = 1:numel(headers)
+                headerStr = headers{i};
+                if ~ischar(headerStr) && ~isstring(headerStr)
+                    try
+                        headerStr = char(string(headerStr));
+                    catch
+                        headerStr = '';
+                    end
+                end
+
+                headerStr = strtrim(char(headerStr));
+                displayName = sprintf('字段%02d', i);
+
+                if startsWith(headerStr, '领域1')
+                    displayName = selectDomainDisplayName(domainNameTemplates, 1, domainCounters(1));
+                    domainCounters(1) = domainCounters(1) + 1;
+                elseif startsWith(headerStr, '领域2')
+                    displayName = selectDomainDisplayName(domainNameTemplates, 2, domainCounters(2));
+                    domainCounters(2) = domainCounters(2) + 1;
+                elseif startsWith(headerStr, '领域3')
+                    displayName = selectDomainDisplayName(domainNameTemplates, 3, domainCounters(3));
+                    domainCounters(3) = domainCounters(3) + 1;
+                elseif startsWith(headerStr, '领域4')
+                    displayName = selectDomainDisplayName(domainNameTemplates, 4, domainCounters(4));
+                    domainCounters(4) = domainCounters(4) + 1;
+                end
+
+                if i <= numel(displayNames)
+                    displayNames{i} = displayName;
+                else
+                    displayNames{end+1} = displayName; %#ok<AGROW>
+                end
+
+                if i > numel(units)
+                    units{end+1} = '';
+                end
+            end
+
+            app.FieldDisplayNames = displayNames;
+            app.FieldUnits = units;
+        end
+
+        function displayName = selectDomainDisplayName(domainNameTemplates, domainIdx, domainCounter)
+            % 根据领域索引和计数，从模板中选择对应的显示名称；不足时退回默认的领域编号格式
+            displayName = '';
+
+            if domainIdx <= numel(domainNameTemplates)
+                names = domainNameTemplates{domainIdx};
+                if domainCounter <= numel(names) && ~isempty(names{domainCounter})
+                    displayName = names{domainCounter};
+                end
+            end
+
+            if isempty(displayName)
+                displayName = sprintf('领域%d.%d', domainIdx, domainCounter);
+            end
+        end
+
         function updateBgInfoFromExcel(app, folderPath)
             % 更新试验背景信息（从当前目录的Excel文件读取）
             excelData = readExcelFile(app, folderPath);
@@ -1353,7 +1529,8 @@ classdef MatViewerTool < matlab.apps.AppBase
                 '*.bmp;*.raw', 'SAR 图像文件 (*.bmp, *.raw)'; ...
                 '*.bmp', 'BMP 图片 (*.bmp)'; ...
                 '*.raw', 'RAW 图片 (*.raw)'; ...
-                '*.mat', 'MAT 文件 (*.mat)'}, ...
+                '*.mat', 'MAT 文件 (*.mat)'; ...
+                '*.*', '所有文件 (*.*)'}, ...
                 '选择文件', startPath, 'MultiSelect', 'on');
 
             % 文件选择后置顶UI（无论是否取消）
@@ -1367,7 +1544,26 @@ classdef MatViewerTool < matlab.apps.AppBase
             if ~iscell(selectedFiles)
                 selectedFiles = {selectedFiles};
             end
-            
+
+            % 尝试从当前选中目录（或其上一级）读取试验背景信息
+            searchFolder = '';
+            if isfolder(app.SelectedExperiment)
+                searchFolder = app.SelectedExperiment;
+            elseif isfile(app.SelectedExperiment)
+                searchFolder = fileparts(app.SelectedExperiment);
+            end
+
+            if isempty(searchFolder) || ~isfolder(searchFolder)
+                searchFolder = selectedPath; % 回退到文件选择路径
+            end
+
+            excelData = readExcelFile(app, searchFolder, true);
+            if ~isempty(excelData)
+                app.ExcelTable.Data = excelData;
+            else
+                app.ExcelTable.Data = {};
+            end
+
             % 清空现有数据
             app.MatFiles = {};
             app.MatData = {};
@@ -1402,9 +1598,6 @@ classdef MatViewerTool < matlab.apps.AppBase
                 app.FieldTable.Data = {};
                 app.FieldTable.ColumnName = {'字段', '值', '类型'};
             end
-
-            % 读取第一级目录Excel中的字段显示名称和单位
-            [app.FieldDisplayNames, app.FieldUnits] = readFieldNamesFromLevel1Excel(app, selectedPath);
 
             % 创建进度对话框
             progressMessage = '正在加载MAT文件...';
@@ -7040,6 +7233,25 @@ classdef MatViewerTool < matlab.apps.AppBase
                     '读取Excel文件失败: %s\n文件路径: %s', ...
                     ME.message, excelPath);
             end
+        end
+
+        function [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(~)
+            % 返回帧信息显示区的默认字段名称和单位
+            numDefaults = 20;
+            defaultNames = arrayfun(@(i) sprintf('字段%02d', i), 1:numDefaults, 'UniformOutput', false);
+
+            defaultUnits = repmat({''}, 1, numel(defaultNames));
+        end
+
+        function domainNameTemplates = getDomainNameTemplates(~)
+            % 配置各领域的显示名称模板，可直接把对应序号的字段改成自定义字符串
+            %（留空则自动使用“领域X.n”默认编号）。
+            domainNameTemplates = {
+                {'领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5'};  % 领域1
+                {'领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5'};  % 领域2
+                {'领域3.1', '领域3.2', '领域3.3', '领域3.4', '领域3.5'};  % 领域3
+                {'领域4.1', '领域4.2', '领域4.3', '领域4.4', '领域4.5', '领域4.6'};  % 领域4
+            };
         end
 
         function executePrepOnCurrentFrame(app, prepIndex)
