@@ -1102,7 +1102,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function updateExcelInfo(app, folderPath)
             % 更新Excel信息显示
-            excelData = readExcelFile(app, folderPath);
+            excelData = readExcelFile(app, folderPath, false);
             
             if ~isempty(excelData)
                 app.ExcelTable.Data = excelData;
@@ -1111,12 +1111,16 @@ classdef MatViewerTool < matlab.apps.AppBase
             end
         end
         
-        function excelData = readExcelFile(app, folderPath)
+        function excelData = readExcelFile(app, folderPath, allowCustomImport)
             % 读取试验背景信息Excel文件（只从3级或4级目录读取）
             % 优先读取4级目录的Excel，如果4级没有则读取3级的Excel
             excelData = {};
             app.FieldDisplayNames = {};
             app.FieldUnits = {};
+
+            if nargin < 3
+                allowCustomImport = false;
+            end
 
             if ~isfolder(folderPath)
                 return;
@@ -1160,8 +1164,12 @@ classdef MatViewerTool < matlab.apps.AppBase
                 end
             end
 
-            % 未找到Excel，提示自定义导入
+            % 未找到Excel且允许自定义导入时，弹窗提示
             if isempty(excelFilePath)
+                if ~allowCustomImport
+                    return;
+                end
+
                 userChoice = uiconfirm(app.UIFigure, ...
                     '未找到Excel文件，是否自定义导入？', ...
                     '未找到Excel', ...
@@ -1325,7 +1333,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         
         function updateBgInfoFromExcel(app, folderPath)
             % 更新试验背景信息（从当前目录的Excel文件读取）
-            excelData = readExcelFile(app, folderPath);
+            excelData = readExcelFile(app, folderPath, false);
             
             if ~isempty(excelData)
                 app.ExcelTable.Data = excelData;
@@ -1424,6 +1432,12 @@ classdef MatViewerTool < matlab.apps.AppBase
                 [startPath, ~, ~] = fileparts(app.SelectedExperiment);
             else
                 startPath = pwd;
+            end
+
+            % 导入阶段再提示缺失的Excel（浏览目录时不弹窗）
+            excelData = readExcelFile(app, startPath, true);
+            if ~isempty(excelData)
+                app.ExcelTable.Data = excelData;
             end
 
             % 打开文件选择对话框
