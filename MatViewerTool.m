@@ -272,7 +272,8 @@ classdef MatViewerTool < matlab.apps.AppBase
             % Excel表格
             app.ExcelTable = uitable(excelLayout);
             app.ExcelTable.ColumnName = {'字段', '值'};
-            app.ExcelTable.ColumnWidth = {'1x', '2x'};
+            % 使用自动宽度，避免列被压缩导致内容横向不可见
+            app.ExcelTable.ColumnWidth = {'fit', 'fit'};
             app.ExcelTable.RowName = {};
             app.ExcelTable.CellSelectionCallback = @(src,event) onExcelDoubleClick(app, event);
             app.ExcelTable.Layout.Row = 2;
