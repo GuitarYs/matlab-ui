@@ -1264,6 +1264,7 @@ classdef MatViewerTool < matlab.apps.AppBase
         function updateFieldDisplayNamesFromHeaders(app, headers)
             % 根据Excel字段名称中的领域信息更新帧信息显示名称
             [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(app);
+            domainNameTemplates = getDomainNameTemplates(app);
 
             displayNames = defaultNames;
             units = defaultUnits;
@@ -1280,19 +1281,19 @@ classdef MatViewerTool < matlab.apps.AppBase
                 end
 
                 headerStr = strtrim(char(headerStr));
-                displayName = sprintf('字段%d', i);
+                displayName = sprintf('字段%02d', i);
 
                 if startsWith(headerStr, '领域1')
-                    displayName = sprintf('领域1.%d', domainCounters(1));
+                    displayName = selectDomainDisplayName(domainNameTemplates, 1, domainCounters(1), defaultNames, i);
                     domainCounters(1) = domainCounters(1) + 1;
                 elseif startsWith(headerStr, '领域2')
-                    displayName = sprintf('领域2.%d', domainCounters(2));
+                    displayName = selectDomainDisplayName(domainNameTemplates, 2, domainCounters(2), defaultNames, i);
                     domainCounters(2) = domainCounters(2) + 1;
                 elseif startsWith(headerStr, '领域3')
-                    displayName = sprintf('领域3.%d', domainCounters(3));
+                    displayName = selectDomainDisplayName(domainNameTemplates, 3, domainCounters(3), defaultNames, i);
                     domainCounters(3) = domainCounters(3) + 1;
                 elseif startsWith(headerStr, '领域4')
-                    displayName = sprintf('领域4.%d', domainCounters(4));
+                    displayName = selectDomainDisplayName(domainNameTemplates, 4, domainCounters(4), defaultNames, i);
                     domainCounters(4) = domainCounters(4) + 1;
                 end
 
@@ -1309,6 +1310,26 @@ classdef MatViewerTool < matlab.apps.AppBase
 
             app.FieldDisplayNames = displayNames;
             app.FieldUnits = units;
+        end
+
+        function displayName = selectDomainDisplayName(domainNameTemplates, domainIdx, domainCounter, defaultNames, fieldIdx)
+            % 根据领域索引和计数，从模板中选择对应的显示名称；不足时退回默认字段名
+            displayName = '';
+
+            if domainIdx <= numel(domainNameTemplates)
+                names = domainNameTemplates{domainIdx};
+                if domainCounter <= numel(names) && ~isempty(names{domainCounter})
+                    displayName = names{domainCounter};
+                end
+            end
+
+            if isempty(displayName)
+                if fieldIdx <= numel(defaultNames)
+                    displayName = defaultNames{fieldIdx};
+                else
+                    displayName = sprintf('字段%02d', fieldIdx);
+                end
+            end
         end
 
         function updateBgInfoFromExcel(app, folderPath)
@@ -7116,9 +7137,19 @@ classdef MatViewerTool < matlab.apps.AppBase
         function [defaultNames, defaultUnits] = getDefaultFieldDisplayNames(~)
             % 返回帧信息显示区的默认字段名称和单位
             numDefaults = 20;
-            defaultNames = arrayfun(@(i) sprintf('字段%d', i), 1:numDefaults, 'UniformOutput', false);
+            defaultNames = arrayfun(@(i) sprintf('字段%02d', i), 1:numDefaults, 'UniformOutput', false);
 
             defaultUnits = repmat({''}, 1, numel(defaultNames));
+        end
+
+        function domainNameTemplates = getDomainNameTemplates(~)
+            % 配置各领域的显示名称模板，便于后续直接修改或扩展
+            domainNameTemplates = {
+                {'领域1.1', '领域1.2', '领域1.3', '领域1.4', '领域1.5'};  % 领域1
+                {'领域2.1', '领域2.2', '领域2.3', '领域2.4', '领域2.5'};  % 领域2
+                {'领域3.1', '领域3.2', '领域3.3', '领域3.4', '领域3.5'};  % 领域3
+                {'领域4.1', '领域4.2', '领域4.3', '领域4.4', '领域4.5'};  % 领域4
+            };
         end
 
         function executePrepOnCurrentFrame(app, prepIndex)
