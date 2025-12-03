@@ -1147,13 +1147,21 @@ classdef MatViewerTool < matlab.apps.AppBase
                     return;
                 end
 
-                userChoice = uiconfirm(app.UIFigure, ...
-                    ['未在所选目录或上一级目录找到Excel文件。', newline, ...
-                    '是否手动选择试验背景信息Excel？'], ...
-                    '未找到Excel', ...
-                    'Options', {'自定义导入Excel', '关闭'}, ...
-                    'DefaultOption', '自定义导入Excel', ...
-                    'CancelOption', '关闭');
+                userChoice = '';
+                try
+                    userChoice = uiconfirm(app.UIFigure, ...
+                        ['未在所选目录或上一级目录找到Excel文件。', newline, ...
+                        '是否手动选择试验背景信息Excel？'], ...
+                        '未找到Excel', ...
+                        'Options', {'自定义导入Excel'}, ...
+                        'DefaultOption', '自定义导入Excel');
+                catch ME
+                    % 用户通过右上角关闭对话框
+                    if strcmp(ME.identifier, 'MATLAB:uiconfirm:OperationCancelled')
+                        return;
+                    end
+                    rethrow(ME);
+                end
 
                 figure(app.UIFigure);
 
@@ -1453,8 +1461,19 @@ classdef MatViewerTool < matlab.apps.AppBase
                 selectedFiles = {selectedFiles};
             end
 
-            % 尝试从所选目录或其上一级读取试验背景信息
-            excelData = readExcelFile(app, selectedPath, true);
+            % 尝试从当前选中目录（或其上一级）读取试验背景信息
+            searchFolder = '';
+            if isfolder(app.SelectedExperiment)
+                searchFolder = app.SelectedExperiment;
+            elseif isfile(app.SelectedExperiment)
+                searchFolder = fileparts(app.SelectedExperiment);
+            end
+
+            if isempty(searchFolder) || ~isfolder(searchFolder)
+                searchFolder = selectedPath; % 回退到文件选择路径
+            end
+
+            excelData = readExcelFile(app, searchFolder, true);
             if ~isempty(excelData)
                 app.ExcelTable.Data = excelData;
             else
