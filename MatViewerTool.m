@@ -147,6 +147,150 @@ classdef MatViewerTool < matlab.apps.AppBase
                 clear app
             end
         end
+
+        function [excelData, headers] = parseExcelLayout(raw)
+            % 根据原始readcell结果解析背景信息，兼容横排/竖排两种格式
+            excelData = {};
+            headers = {};
+
+            [rowCount, colCount] = size(raw);
+
+            % ------- 竖排（首列字段、第二列值）方案 -------
+            verticalCount = 0;
+            verticalHeaders = {};
+            verticalValues = {};
+            if colCount >= 2
+                fieldCol = raw(:, 1);
+                valueCol = raw(:, 2);
+
+                % 跳过表头（字段/值）行
+                startRow = 1;
+                if rowCount >= 1 && isHeaderLabel(fieldCol{1}) && isHeaderLabel(valueCol{1})
+                    startRow = 2;
+                end
+
+                for r = startRow:rowCount
+                    fieldCell = fieldCol{r};
+                    valueCell = valueCol{r};
+                    if isEmptyCell(fieldCell)
+                        continue;
+                    end
+
+                    verticalHeaders{end+1} = fieldCell; %#ok<AGROW>
+                    verticalValues{end+1} = valueCell; %#ok<AGROW>
+                end
+
+                verticalCount = numel(verticalHeaders);
+            end
+
+            % ------- 横排（第一行字段、第二行对应值）方案 -------
+            horizontalCount = 0;
+            horizontalHeaders = {};
+            horizontalValues = {};
+            if rowCount >= 2
+                candidateHeaders = raw(1, 2:end);
+                candidateValues = raw(2, 2:end);
+
+                validIdx = ~cellfun(@isEmptyCell, candidateHeaders);
+                horizontalHeaders = candidateHeaders(validIdx);
+                horizontalValues = candidateValues(validIdx);
+                horizontalCount = numel(horizontalHeaders);
+            end
+
+            % 优先采用条目更多的布局；数量相同时优先竖排（符合原先视觉布局）
+            useVertical = verticalCount >= horizontalCount && verticalCount > 0;
+
+            if useVertical
+                excelData = [verticalHeaders', verticalValues'];
+                headers = verticalHeaders;
+            elseif horizontalCount > 0
+                excelData = [horizontalHeaders', horizontalValues'];
+                headers = horizontalHeaders;
+            end
+        end
+
+        function isHeader = isHeaderLabel(cellValue)
+            % 判断单元格是否为表头“字段/值”
+            isHeader = false;
+            if ischar(cellValue) || isstring(cellValue)
+                label = strtrim(char(cellValue));
+                isHeader = any(strcmp(label, {'字段', '值', 'Field', 'Value'}));
+            end
+        end
+
+        function emptyFlag = isEmptyCell(cellValue)
+            % 判断单元格是否为空
+            emptyFlag = isempty(cellValue) || ...
+                (ischar(cellValue) && isempty(strtrim(cellValue))) || ...
+                (isstring(cellValue) && strlength(strtrim(cellValue)) == 0) || ...
+                (isnumeric(cellValue) && isnan(cellValue));
+        end
+
+        function excelDataOut = convertExcelValuesToStrings(excelDataIn)
+            % 将二维cell的字段/值统一转换为字符串表示
+            excelDataOut = excelDataIn;
+
+            for i = 1:size(excelDataIn, 1)
+                % 处理字段名
+                headerVal = excelDataIn{i, 1};
+                excelDataOut{i, 1} = normalizeToString(headerVal, i);
+
+                % 处理对应的值
+                valueVal = excelDataIn{i, 2};
+                excelDataOut{i, 2} = normalizeValueToString(valueVal);
+            end
+        end
+
+        function outStr = normalizeToString(val, idx)
+            % 将任意单元格值转换为字符串，供字段名使用
+            if ischar(val) || isstring(val)
+                outStr = strtrim(char(val));
+                if isempty(outStr)
+                    outStr = sprintf('字段%d', idx);
+                end
+            elseif isnumeric(val)
+                outStr = num2str(val);
+            elseif isdatetime(val) || isduration(val)
+                outStr = char(val);
+            elseif islogical(val)
+                outStr = char(string(val));
+            else
+                try
+                    outStr = char(string(val));
+                catch
+                    outStr = sprintf('字段%d', idx);
+                end
+            end
+        end
+
+        function outStr = normalizeValueToString(val)
+            % 将值统一转换为字符串
+            if isempty(val)
+                outStr = '';
+            elseif isnumeric(val)
+                if isnan(val)
+                    outStr = '';
+                else
+                    outStr = num2str(val);
+                end
+            elseif isdatetime(val) || isduration(val)
+                outStr = char(val);
+            elseif islogical(val)
+                outStr = char(string(val));
+            elseif iscell(val)
+                outStr = '{cell}';
+            elseif isstruct(val)
+                outStr = '{struct}';
+            elseif ischar(val) || isstring(val)
+                outStr = char(val);
+            else
+                try
+                    outStr = char(string(val));
+                catch
+                    outStr = class(val);
+                end
+            end
+        end
         
         function delete(app)
             % 删除 app 时的清理
@@ -273,7 +417,8 @@ classdef MatViewerTool < matlab.apps.AppBase
             app.ExcelTable = uitable(excelLayout);
             app.ExcelTable.ColumnName = {'字段', '值'};
             % 保持左侧字段列较窄、右侧值列较宽，匹配原有布局
-            app.ExcelTable.ColumnWidth = {'1x', '2x'};
+            % 保持“字段”列较窄、“值”列较宽的原始布局
+            app.ExcelTable.ColumnWidth = {70, '1x'};
             app.ExcelTable.RowName = {};
             app.ExcelTable.CellSelectionCallback = @(src,event) onExcelDoubleClick(app, event);
             app.ExcelTable.Layout.Row = 2;
@@ -1190,78 +1335,17 @@ classdef MatViewerTool < matlab.apps.AppBase
                 % 读取Excel文件 (使用 readcell 替代 xlsread)
                 raw = readcell(excelFilePath);
 
-                % Excel格式：第1行从B1开始是字段，第2行从B2开始是值
-                if size(raw, 1) >= 2 && size(raw, 2) >= 2
-                    % 从第2列（B列）开始读取
-                    headers = raw(1, 2:end);
-                    values = raw(2, 2:end);
+                % 支持两种布局：
+                % 1) A列为“字段”、B列为“值”，数据按行垂直排列
+                % 2) 第1行自B列起是字段，第2行自B列起是值（原横排格式）
+                if ~isempty(raw) && size(raw, 2) >= 2
+                    [excelData, headersForDomain] = parseExcelLayout(raw);
 
-                    % 过滤掉空字段
-                    validIdx = ~cellfun(@(x) isempty(x) || ...
-                        (ischar(x) && isempty(strtrim(x))) || ...
-                        (isnumeric(x) && isnan(x)), headers);
-
-                    if any(validIdx)
-                        % 转换为字符串
-                        headers = headers(validIdx);
-                        values = values(validIdx);
-
-                        % 确保 headers 也是字符串
-                        for i = 1:length(headers)
-                            if ~ischar(headers{i}) && ~isstring(headers{i})
-                                if isnumeric(headers{i})
-                                    headers{i} = num2str(headers{i});
-                                elseif isdatetime(headers{i})
-                                    headers{i} = char(headers{i});
-                                else
-                                    try
-                                        headers{i} = char(string(headers{i}));
-                                    catch
-                                        headers{i} = sprintf('字段%d', i);
-                                    end
-                                end
-                            end
-                        end
-
-                        % 将所有值转换为字符串（处理各种数据类型）
-                        for i = 1:length(values)
-                            if isempty(values{i})
-                                values{i} = '';
-                            elseif isnumeric(values{i})
-                                if isnan(values{i})
-                                    values{i} = '';
-                                else
-                                    values{i} = num2str(values{i});
-                                end
-                            elseif isdatetime(values{i})
-                                % datetime 类型转换为字符串
-                                values{i} = char(values{i});
-                            elseif isduration(values{i})
-                                % duration 类型转换为字符串
-                                values{i} = char(values{i});
-                            elseif islogical(values{i})
-                                % logical 类型转换为字符串
-                                values{i} = char(string(values{i}));
-                            elseif iscell(values{i})
-                                % 嵌套的 cell，尝试转换
-                                values{i} = '{cell}';
-                            elseif isstruct(values{i})
-                                % struct 类型
-                                values{i} = '{struct}';
-                            elseif ~ischar(values{i}) && ~isstring(values{i})
-                                % 其他未知类型，尝试转换为字符串
-                                try
-                                    values{i} = char(string(values{i}));
-                                catch
-                                    values{i} = class(values{i});  % 显示类型名
-                                end
-                            end
-                        end
-
-                        excelData = [headers'', values''];
+                    if ~isempty(excelData)
+                        excelData = convertExcelValuesToStrings(excelData);
 
                         % 根据Excel中的领域名称更新帧信息显示名称
-                        updateFieldDisplayNamesFromHeaders(app, headers);
+                        updateFieldDisplayNamesFromHeaders(app, headersForDomain);
                     end
                 end
             catch ME
