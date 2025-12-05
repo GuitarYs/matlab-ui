@@ -5578,7 +5578,7 @@ classdef MatViewerTool < matlab.apps.AppBase
                         else
                             % 调用自定义脚本
                             [scriptPath, scriptName, ~] = fileparts(prepConfig.scriptPath);
-                            oldPath = addpath(scriptPath);
+                            [scriptFunc, cleanupPath] = app.prepareScriptFunction(scriptPath, scriptName);
 
                             try
                                 % 动态替换帧信息参数
@@ -5607,7 +5607,6 @@ classdef MatViewerTool < matlab.apps.AppBase
                                 actualParams.output_dir = outputDir;
                                 actualParams.file_name = originalName;
 
-                                scriptFunc = str2func(scriptName);
                                 scriptOutput = scriptFunc(inputMatrix, actualParams);
                                 
                                 % 处理脚本输出 - 支持结构体和直接数值矩阵
@@ -5635,11 +5634,8 @@ classdef MatViewerTool < matlab.apps.AppBase
                                     processedMatrix = scriptOutput;
                                 end
                             catch ME
-                                path(oldPath);
                                 error('处理第 %d 帧失败：%s', frameIdx, ME.message);
                             end
-                            
-                            path(oldPath);
                         end
                         
                         % 创建输出数据（内存缓存保留完整数据）
@@ -5868,9 +5864,7 @@ classdef MatViewerTool < matlab.apps.AppBase
                 else
                     % 调用自定义脚本
                     [scriptPath, scriptName, ~] = fileparts(prepConfig.scriptPath);
-
-                    % 临时添加脚本路径
-                    oldPath = addpath(scriptPath);
+                    [scriptFunc, cleanupPath] = app.prepareScriptFunction(scriptPath, scriptName);
 
                     try
 
@@ -5937,7 +5931,6 @@ classdef MatViewerTool < matlab.apps.AppBase
                         end
 
                         % 调用脚本函数
-                        scriptFunc = str2func(scriptName);
                         scriptOutput = scriptFunc(inputMatrix, actualParams);
                         
                         % 处理脚本输出 - 支持结构体和直接数值矩阵
@@ -5966,13 +5959,9 @@ classdef MatViewerTool < matlab.apps.AppBase
                         end
                         
                     catch ME
-                        path(oldPath);  % 恢复路径
                         uialert(app.UIFigure, sprintf('执行预处理脚本失败：\n%s', ME.message), '错误', 'Icon', 'error');
                         return;
                     end
-                    
-                    % 恢复路径
-                    path(oldPath);
                 end
 
                 % 保存处理后的数据（内存中保留完整数据）
@@ -6029,7 +6018,21 @@ classdef MatViewerTool < matlab.apps.AppBase
                 success = false;
             end
         end
-        
+
+        function [scriptFunc, cleanupGuard] = prepareScriptFunction(app, scriptPath, scriptName)
+            % 生成脚本函数句柄，并在编译环境避免修改搜索路径
+            if isdeployed
+                originalDir = pwd;
+                cd(scriptPath);
+                cleanupGuard = onCleanup(@() cd(originalDir));
+            else
+                oldPath = addpath(scriptPath);
+                cleanupGuard = onCleanup(@() path(oldPath));
+            end
+
+            scriptFunc = str2func(scriptName);
+        end
+
         function value = convertParamValue(app, paramValue, paramType, paramTypeMap)
             % 统一的参数类型转换函数
             % paramTypeMap: 可选，用于struct内部字段的类型映射
@@ -6187,8 +6190,8 @@ classdef MatViewerTool < matlab.apps.AppBase
                 else
                     % 调用自定义脚本
                     [scriptPath, scriptName, ~] = fileparts(prepConfig.scriptPath);
-                    oldPath = addpath(scriptPath);
-                    
+                    [scriptFunc, cleanupPath] = app.prepareScriptFunction(scriptPath, scriptName);
+
                     try
                         % 准备参数（外部文件没有帧信息，只使用默认参数）
                         actualParams = prepConfig.params;
@@ -6223,7 +6226,6 @@ classdef MatViewerTool < matlab.apps.AppBase
                             end
                         end
 
-                        scriptFunc = str2func(scriptName);
                         processedMatrix = scriptFunc(inputMatrix, actualParams);
                         
                         % 检查脚本输出
@@ -6253,14 +6255,11 @@ classdef MatViewerTool < matlab.apps.AppBase
                             additionalOutputs = struct();
                         end
                     catch ME
-                        path(oldPath);
                         app.StatusLabel.Text = oldStatus;
                         app.StatusLabel.FontColor = [0 0.5 0];
                         uialert(app.UIFigure, sprintf('处理外部文件失败：\n%s', ME.message), '错误', 'Icon', 'error');
                         return;
                     end
-                    
-                    path(oldPath);
                 end
                 
                 % ⭐ 关键修复：保存逻辑与当前帧处理保持一致
@@ -6383,13 +6382,10 @@ classdef MatViewerTool < matlab.apps.AppBase
                 else
                     % 调用自定义脚本
                     [scriptPath, scriptName, ~] = fileparts(prepConfig.scriptPath);
-                    
-                    % 临时添加脚本路径
-                    oldPath = addpath(scriptPath);
-                    
+                    [scriptFunc, cleanupPath] = app.prepareScriptFunction(scriptPath, scriptName);
+
                     try
                         % 调用脚本函数
-                        scriptFunc = str2func(scriptName);
                         processedMatrix = scriptFunc(inputMatrix, actualParams);
                         
                         % 验证输出
@@ -6422,13 +6418,9 @@ classdef MatViewerTool < matlab.apps.AppBase
                         success = true;
                         
                     catch ME
-                        path(oldPath);  % 恢复路径
                         uialert(app.UIFigure, sprintf('执行预处理脚本失败：\n%s', ME.message), '错误', 'Icon', 'error');
                         return;
                     end
-                    
-                    % 恢复路径
-                    path(oldPath);
                 end
                 
             catch ME
@@ -7535,9 +7527,7 @@ classdef MatViewerTool < matlab.apps.AppBase
 
                 % 调用默认脚本
                 [scriptDir, scriptName, ~] = fileparts(scriptFile);
-
-                % 临时添加脚本路径
-                oldPath = addpath(scriptDir);
+                [scriptFunc, cleanupPath] = app.prepareScriptFunction(scriptDir, scriptName);
 
                 try
                     % 添加输出目录和文件名到参数中（供脚本使用）
@@ -7576,7 +7566,6 @@ classdef MatViewerTool < matlab.apps.AppBase
                     end
 
                     % 调用脚本函数
-                    scriptFunc = str2func(scriptName);
                     processedMatrix = scriptFunc(inputMatrix, actualParams);
 
                     % 验证输出
@@ -7607,15 +7596,11 @@ classdef MatViewerTool < matlab.apps.AppBase
                     end
 
                 catch ME
-                    path(oldPath);  % 恢复路径
                     app.StatusLabel.Text = oldStatus;
                     app.StatusLabel.FontColor = [0 0.5 0];
                     uialert(app.UIFigure, sprintf('执行预处理脚本失败：\n%s', ME.message), '错误', 'Icon', 'error');
                     return;
                 end
-
-                % 恢复路径
-                path(oldPath);
 
                 % 创建处理后的数据
                 processedData = currentData;
